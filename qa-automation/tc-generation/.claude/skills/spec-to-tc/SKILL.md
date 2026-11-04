@@ -6,8 +6,8 @@ argument-hint: <spec 파일 경로>
 
 # Spec → Test Case → Test Suite
 
-이 스킬은 `qa-automation` 프로젝트의 1~3단계를 수행한다.
-아래의 모든 경로는 `qa-automation` 폴더(이 SKILL.md에서 세 단계 위) 기준이다.
+이 스킬은 `qa-automation`의 TC 생성 단계(1~3단계)를 수행한다.
+아래의 모든 경로는 `tc-generation` 폴더(이 SKILL.md에서 세 단계 위) 기준이다.
 
 ## 0. Spec 찾기
 
@@ -107,4 +107,4 @@ python scripts/build_suite.py output/<이름>/testcases.json --rounds 2
 - 요구사항 수, TC 수 (Positive / Negative / Boundary 각각)
 - 만들어진 엑셀 파일 경로
 - `questions`에 적은 확인 필요 항목 (이 항목들은 엑셀의 `확인 필요` 시트에도 들어간다)
-- 다음 단계: 테스터가 엑셀을 채운 뒤 `python scripts/review_suite.py <엑셀 파일>`로 검수 리포트를 만든다
+- 다음 단계: 테스터가 엑셀을 채운 뒤 `python ../tc-execution/scripts/review_suite.py <엑셀 파일>`로 검수 리포트를 만든다

@@ -19,9 +19,9 @@ excel-merger/input/*
 excel-merger/output/
 
 # qa-automation 실제 Spec과 생성물 (회사 문서가 올라가지 않도록)
-qa-automation/specs/*
-!qa-automation/specs/.gitkeep
-qa-automation/output/
+qa-automation/tc-generation/specs/*
+!qa-automation/tc-generation/specs/.gitkeep
+qa-automation/tc-generation/output/
 
 # OS
 .DS_Store

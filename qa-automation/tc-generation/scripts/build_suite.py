@@ -15,6 +15,9 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+# tc-generation과 tc-execution이 함께 쓰는 common/suite_format.py를 찾을 수 있게 합니다
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "common"))
+
 from suite_format import (
     ANALYSIS_SHEET,
     FINAL_RESULT_COLUMN,

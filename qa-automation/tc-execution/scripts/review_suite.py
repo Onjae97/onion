@@ -18,6 +18,9 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+# tc-generation과 tc-execution이 함께 쓰는 common/suite_format.py를 찾을 수 있게 합니다
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "common"))
+
 from suite_format import NEEDS_REMARK, RESULT_VALUES, TC_SHEET, round_header
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
