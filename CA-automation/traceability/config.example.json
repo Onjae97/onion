@@ -1,0 +1,34 @@
+{
+  "project": "MYPROJECT",
+  "confluence": {
+    "base": "https://confluence.example.com",
+    "ci_list_page_id": "000000000",
+    "login_path": "/login.action"
+  },
+  "codebeamer": {
+    "base": "https://codebeamer.example.com/cb",
+    "login_path": "/login.spr"
+  },
+  "ci_list": {
+    "pbl_header": "PBL",
+    "pbl_fallback_column": "O",
+    "codebeamer_only": true
+  },
+  "judge": {
+    "exclude_types": [
+      "Folder",
+      "Information"
+    ]
+  },
+  "browser": {
+    "channel": "chrome"
+  },
+  "batch_size": 10,
+  "output_dir": "output",
+  "excel": {
+    "visible": true
+  },
+  "verify_sample": 10,
+  "scope": "top_with_descendants",
+  "scope_options": "top_with_descendants(최상위 Tracker+하위 전부) | with_descendants(등록 Tracker+하위) | tracker_only(등록 Tracker만)"
+}

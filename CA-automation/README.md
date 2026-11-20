@@ -1,0 +1,21 @@
+# CA-automation
+
+형상 감사(CA, Configuration Audit) 대비 CM 업무 자동화 도구 모음.
+
+| 도구 | 설명 | 사용 기술 |
+| --- | --- | --- |
+| [traceability](traceability/) | CI list의 CI(Codebeamer Tracker, 하위 Tracker 포함)마다 연결이 없는 Item을 전수 조사해 추적성 Gap Matrix 엑셀 생성. 로그인 세션 재사용·자동 로그인, DRM 엑셀 읽기 지원 | Python, Playwright, openpyxl, pywin32, keyring |
+
+## 공통 원칙
+- 조회는 읽기 전용, 조회 실패는 **확인불가**로 남긴다 (연결/미연결로 넘기지 않음)
+- 결과는 항상 새 파일, 공식 산출물 반영·저장은 담당자가 검토 후 직접
+- 회사 주소·페이지 번호 등 실제 값은 `config.json`(Git 제외)에만 둔다. 저장소에는 `config.example.json`(가짜 값)만 올린다
+- 로그인 정보는 Windows 자격 증명 관리자에만 저장 (파일·저장소에 남기지 않음)
+
+## 다른 PC에서 쓰기
+```
+git clone https://github.com/Onjae97/onion
+cd onion\CA-automation\traceability
+copy config.example.json config.json   (실제 값 입력)
+setup.bat → set_login.bat → doctor.bat → run_traceability.bat
+```

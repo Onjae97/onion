@@ -26,3 +26,10 @@ qa-automation/tc-generation/output/
 # OS
 .DS_Store
 Thumbs.db
+
+# CA-automation — 회사 정보·로그인 세션·결과물이 올라가지 않도록
+CA-automation/**/config.json
+CA-automation/**/state/
+CA-automation/**/output/
+CA-automation/**/*.xlsx
+CA-automation/**/*.xls
