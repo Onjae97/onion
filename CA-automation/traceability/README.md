@@ -29,8 +29,15 @@ API 토큰은 필요 없습니다. 프로그램 전용 브라우저 창에 **한
 - 저장된 정보가 없거나 자동 로그인이 실패하면 예전처럼 창에서 직접 로그인하라는 안내가 나옵니다.
 
 ## 매번
-- `run_traceability.bat` 더블클릭 → 끝나면 `output\추적성_GapMatrix_프로젝트명_날짜_시각.xlsx`
-- 일부 CI만: 명령 프롬프트에서 `run_traceability.bat --ci CI_ID1 --ci CI_ID2`
+- `run_traceability.bat` 더블클릭 → 검사 방식 선택 (10초 동안 입력이 없으면 1번)
+  | 번호 | 검사 방식 | 범위 | 용도 |
+  |---|---|---|---|
+  | 1 | **전체 검사** (기본) | 최상위 Tracker + 하위 Tracker 전부 (`config.json`의 `scope`) | CA 근거 |
+  | 2 | **빠른 검사** (`--quick`) | CI list에 적힌 Tracker 하나만 | 참고용 (하위 Tracker가 큰 CI의 시간 단축) |
+- 끝나면 `output\추적성_GapMatrix_프로젝트명_날짜_시각.xlsx` (빠른 검사는 끝에 `_quick`)
+- 명령 프롬프트에서 옵션을 주면 묻지 않고 바로 실행: `run_traceability.bat --quick`
+- 일부 CI만: `run_traceability.bat --ci CI_ID1 --ci CI_ID2` (`--quick`과 함께 써도 됨)
+- 빠른 검사는 결과가 전체 검사와 다를 수 있습니다 (예: Item이 하위 Tracker에만 있는 CI는 분모 0). **변동 탭은 같은 검사 방식끼리만 비교**합니다.
 
 ## CI list가 DRM 파일일 때
 회사 DRM으로 암호화된 CI list는 Python이 직접 읽을 수 없습니다. 이때 프로그램이 **PC의 엑셀을 따로 실행해 읽기 전용으로 열고**, 값만 읽은 뒤 **저장하지 않고 닫습니다.** 실행 중에 엑셀 창이 잠깐 떴다가 닫히는 것은 정상입니다. 지금 열려 있는 다른 엑셀 파일에는 영향이 없습니다.

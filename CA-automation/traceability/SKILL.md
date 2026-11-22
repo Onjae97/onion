@@ -1,7 +1,7 @@
 ---
 name: traceability-gap-matrix
 description: CI list에 등록된 CI의 Codebeamer 추적성(연결 0개 Item)을 전수 조사해 Gap Matrix 엑셀을 만든다. CA 추적성 항목 확인, 미추적 Item 목록, 커버리지 요청 시 사용.
-version: 1.7
+version: 1.8
 ---
 # 추적성 Gap Matrix (AUTO-001)
 
@@ -41,7 +41,7 @@ AI 에이전트(Claude·Codex 등)가 이 도구를 실행·수정할 때 따르
 - **조회 실패 = 확인불가.** 실패한 Item·CI를 연결/미연결로 넘기지 않는다. 분모에서 빼고 확인불가 탭에 남긴다.
 - **읽기 전용.** GET 요청만 한다. Codebeamer·Confluence에 쓰지 않는다.
 - **결과는 새 파일.** 기존 산출물을 덮어쓰지 않는다. 공식 산출물 반영·저장·서명은 사람이 한다.
-- **코드를 고치면** `test/`의 가짜 서버 시험(`run_e2e.py`, `run_scope.py`, `run_autologin.py`, `run_counterpart.py`, `test_drm_excel.py` — 리눅스는 `xvfb-run python …`)을 통과시킨 뒤 반영한다.
+- **코드를 고치면** `test/`의 가짜 서버 시험(`run_e2e.py`, `run_scope.py`, `run_autologin.py`, `run_counterpart.py`, `run_quick.py`, `test_drm_excel.py` — 리눅스는 `xvfb-run python …`)을 통과시킨 뒤 반영한다.
 - 규칙을 바꾸면 위키 `traceability-rules.md`와 이 파일을 함께 고치고, 결과가 바뀌는 CI 수를 전후 비교해 보고한다.
 
 ## DRM
@@ -50,7 +50,8 @@ AI 에이전트(Claude·Codex 등)가 이 도구를 실행·수정할 때 따르
 
 ## 실행
 - 점검: `doctor.bat` (`python traceability.py --doctor`)
-- 전체: `run_traceability.bat`
+- 전체: `run_traceability.bat` (옵션 없이 실행하면 1 전체 / 2 빠른 검사 선택, 10초 무입력 = 1)
+- **빠른 검사: `--quick`** — 검사 범위를 `tracker_only`(CI list에 적힌 Tracker만)로 강제. 결과 파일명 `_quick`, 실행정보에 표시. 참고용이며 CA 근거는 전체 검사. 변동 비교 기준은 `state/last_run_quick.json`으로 분리(전체 검사 기준 `last_run.json`을 건드리지 않음). (사용자 결정 2026-11-23)
 - 일부: `python traceability.py --ci <CI ID> [--ci …]` / `--limit N` (일부 실행은 변동 비교 기준을 갱신하지 않음)
 
 ## 사용 API (Codebeamer REST v3, 로그인 세션)

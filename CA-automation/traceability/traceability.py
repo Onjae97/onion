@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.7"
+VERSION = "1.8"
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state"
 
@@ -1086,6 +1086,8 @@ def main(argv=None):
     ap.add_argument("--ci", action="append", help="이 CI ID만 검사 (여러 번 지정 가능)")
     ap.add_argument("--limit", type=int, help="앞에서 N개 CI만 (시험용)")
     ap.add_argument("--headless", action="store_true", help="브라우저 창 숨김 (로그인 저장된 뒤에만)")
+    ap.add_argument("--quick", action="store_true",
+                    help="빠른 검사: CI list에 적힌 Tracker 하나만 검사 (하위 Tracker 제외). 결과는 참고용 — CA 근거는 전체 검사로")
     ap.add_argument("--config", default=str(HERE / "config.json"))
     ap.add_argument("--set-login", action="store_true", help="로그인 ID/PW 저장 (Windows 자격 증명 관리자)")
     ap.add_argument("--clear-login", action="store_true", help="저장된 로그인 정보 삭제")
@@ -1106,10 +1108,12 @@ def main(argv=None):
     out_dir = (HERE / cfg.get("output_dir", "output"))
     out_dir.mkdir(exist_ok=True)
     exclude = {t.lower() for t in cfg["judge"]["exclude_types"]}
+    scope = "tracker_only" if a.quick else cfg.get("scope", "top_with_descendants")
     t0 = time.time()
 
     from playwright.sync_api import sync_playwright
-    log(f"AUTO-001 추적성 Gap Matrix v{VERSION} 시작{' (점검 모드)' if a.doctor else ''}")
+    log(f"AUTO-001 추적성 Gap Matrix v{VERSION} 시작{' (점검 모드)' if a.doctor else ''}"
+        f"{' — 빠른 검사(CI list에 적힌 Tracker만, 하위 Tracker 제외)' if a.quick else ''}")
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             str(STATE / "browser-profile"), channel=cfg["browser"].get("channel") or None,
@@ -1174,7 +1178,7 @@ def main(argv=None):
                     want = input().strip()
                     c = next((x for x in cis if x["ciId"] == want and x["trackerId"]), first)
                 t = ccb.get(f"/api/v3/trackers/{c['trackerId']}")
-                mode = cfg.get("scope", "top_with_descendants")
+                mode = scope
                 sc = resolve_scope(ccb, c["trackerId"], mode)
                 log(f"  검사 범위({mode}): 최상위 '{sc['root_name']}'({sc['root']}) · Tracker {len(sc['trackers'])}개 {('— ' + sc['note']) if sc['note'] else ''}")
                 for x in sc["trackers"][:30]:
@@ -1244,7 +1248,7 @@ def main(argv=None):
             type_cache = {}  # 연결 상대 유형 — 이번 실행 안에서만 재사용
             for n, c in enumerate(cis, 1):
                 t1 = time.time()
-                r = check_ci(ccb, c, exclude, cfg.get("verify_sample", 10), cfg.get("scope", "top_with_descendants"), type_cache)
+                r = check_ci(ccb, c, exclude, cfg.get("verify_sample", 10), scope, type_cache)
                 results.append(r)
                 cov = coverage(r["denom"], len(r["unlinked"]))
                 if r.get("scope_note"):
@@ -1255,7 +1259,8 @@ def main(argv=None):
             ctx.close()
 
     # ⑤ 엑셀
-    prev_path = STATE / "last_run.json"
+    # 변동 비교 기준은 검사 방식별로 따로 둔다 (빠른 검사가 전체 검사 기준을 덮어쓰거나 섞이지 않게)
+    prev_path = STATE / ("last_run_quick.json" if a.quick else "last_run.json")
     prev = json.loads(prev_path.read_text(encoding="utf-8")) if prev_path.exists() else None
     meta = {
         "실행 시각": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1265,7 +1270,8 @@ def main(argv=None):
                  + (" (일부 CI만 지정 실행)" if a.ci or a.limit else ""),
         "검사 범위": {"top_with_descendants": "등록 Tracker의 최상위 Tracker와 그 아래 하위 Tracker 전부",
                    "with_descendants": "등록 Tracker와 그 아래 하위 Tracker 전부",
-                   "tracker_only": "등록 Tracker만"}.get(cfg.get("scope", "top_with_descendants"), cfg.get("scope")),
+                   "tracker_only": "등록 Tracker만"}.get(scope, scope)
+                 + (" — 빠른 검사(--quick): 참고용, CA 근거는 전체 검사 결과 사용" if a.quick else ""),
         "Type 미지정(--)": "판정 대상에 포함 (화면 필터와 동일). 결과에서 따로 집계·표시 — Overview·Tracker별 열, Category 탭 비고",
         "판정 규칙": "Item 유형(Type 선택지 이름, 철자 유사·한글 '정보' 포함) Folder·Information 제외 / Up·Downstream Reference + Association 중 "
                      "Folder·Information이 아닌 상대와의 연결 1개 이상 = 연결 (취소·폐기 항목과의 연결 포함) / 상대가 모두 Folder·Information = 미추적 / "
@@ -1275,7 +1281,7 @@ def main(argv=None):
         "주의": "자동 생성 초안입니다. 공식 산출물 반영·저장은 담당자가 검토 후 직접 합니다.",
     }
     wb = build_workbook(results, meta, prev, cfg["codebeamer"]["base"])
-    out = out_dir / f"추적성_GapMatrix_{cfg.get('project', '')}_{time.strftime('%Y-%m-%d_%H%M')}.xlsx"
+    out = out_dir / f"추적성_GapMatrix_{cfg.get('project', '')}_{time.strftime('%Y-%m-%d_%H%M')}{'_quick' if a.quick else ''}.xlsx"
     wb.save(out)
     if not (a.ci or a.limit):
         prev_path.write_text(json.dumps({"run_at": meta["실행 시각"], "cis": {
