@@ -50,7 +50,16 @@ ITEMS = {
            {"id": 16, "categories": [{"id": 1, "name": "Folder"}]},  # 유형이 Category(Type) 필드에만 있는 경우 → 제외돼야 함
            {"id": 17, "categories": [{"id": 3, "name": "Requirement"}]},
            {"id": 18, "typeName": "Requirement", "categories": [{"id": 3, "name": "Infomation"}]},  # 실제 사례: 오타 'Infomation' → 제외돼야 함
-           {"id": 19, "typeName": "Requirement", "categories": [{"id": 1, "name": "Function"}]}],  # Category 필드 id=1 (Type의 Folder id와 겹침) → 제외되면 안 됨
+           {"id": 19, "typeName": "Requirement", "categories": [{"id": 1, "name": "Function"}]},  # Category 필드 id=1 (Type의 Folder id와 겹침) → 제외되면 안 됨
+           # v1.7 연결 상대 유형 시험 (relations 참고)
+           {"id": 50, "typeName": "Requirement"},  # 상대가 같은 범위의 Information(13)뿐 → 미추적
+           {"id": 51, "typeName": "Requirement"},  # 상대가 범위 밖 '정보'(60)뿐 → 미추적 (상세 조회)
+           {"id": 52, "typeName": "Requirement"},  # Folder(11) + 범위 밖 Requirement(61) → 연결
+           {"id": 53, "typeName": "Requirement"},  # 상대 상세 조회 실패(없는 Item) → 확인불가
+           {"id": 54, "typeName": "Requirement", "categories": [{"id": 5, "name": "정보"}]},  # 한글 '정보' → 제외
+           {"id": 55, "typeName": "Requirement"},  # 응답에 상대 번호 없음 → 확인불가
+           {"id": 56, "typeName": "Requirement"},  # 1페이지 Folder만, 2페이지 Requirement → 연결 (다음 페이지 확인)
+           {"id": 57, "typeName": "Requirement"}],  # 1·2페이지 모두 Folder/Information → 미추적
     1002: [{"id": 20000 + i, "typeName": "Requirement" if i % 50 else "Folder"} for i in range(1200)],  # paging
     1003: [{"id": 31, "typeName": "Requirement"}, {"id": 32, "typeName": "Requirement"}],
     1004: [{"id": 41, "typeName": "Requirement"}, {"id": 42, "typeName": "Requirement"}, {"id": 43, "typeName": "Requirement"}],
@@ -66,6 +75,8 @@ ITEMS.update({
     4000: [],
     4001: [{"id": 40010 + i, "typeName": "Test Case"} for i in range(8)],
     4002: [{"id": 40020 + i, "typeName": "Test Case"} for i in range(4)],
+    5000: [{"id": 60, "typeName": "Requirement", "categories": [{"id": 5, "name": "정보"}]},  # 어느 CI에도 없는 Tracker
+           {"id": 61, "typeName": "Requirement", "categories": [{"id": 3, "name": "Requirement"}]}],
 })
 KEYS = {1001: "SYS1_01", 1002: "SYS2_01", 1003: "SWE1_01", 1004: "SWE2_01", 2999: "SYS5_PLAN", 3000: "SYS5_SPEC",
         3001: "TCA", 3002: "TCB", 3003: "TC-GROUP-B-1", 4000: "SYS4_XX", 4001: "SIT-A", 4002: "SIT-B"}
@@ -86,15 +97,43 @@ for _t, _its in ITEMS.items():
         _it["tracker"] = {"id": _t, "type": "TrackerReference"}
 
 
-def relations(iid):
+def ref(target, kind="DownstreamTrackerItemReference"):
+    """Codebeamer v3 연결 1건: id = 연결 번호, itemRevision.id = 상대 Item 번호"""
+    return {"id": 900000 + target, "itemRevision": {"id": target, "version": 1}, "type": kind}
+
+
+SPECIAL_REL = {
+    50: {"upstreamReferences": [ref(13)]},
+    51: {"incomingAssociations": [ref(60, "IncomingTrackerItemAssociation")]},
+    52: {"upstreamReferences": [ref(11)], "outgoingAssociations": [ref(61, "OutgoingTrackerItemAssociation")]},
+    53: {"downstreamReferences": [ref(999999)]},
+    55: {"downstreamReferences": [{"id": 777, "type": "DownstreamTrackerItemReference"}]},
+}
+
+
+PAGED_REL = {  # 여러 페이지 relations (isLastPage)
+    56: [{"upstreamReferences": [ref(11)]}, {"downstreamReferences": [ref(17)]}],
+    57: [{"upstreamReferences": [ref(11)]}, {"incomingAssociations": [ref(13, "IncomingTrackerItemAssociation")]}],
+}
+
+
+def relations(iid, page=1):
+    if iid in PAGED_REL:
+        pages = PAGED_REL[iid]
+        body = {"downstreamReferences": [], "upstreamReferences": [], "incomingAssociations": [], "outgoingAssociations": [],
+                **pages[page - 1]}
+        return {"page": page, "pageSize": 1, "isLastPage": page >= len(pages), **body}
+    if iid in SPECIAL_REL:
+        return {"downstreamReferences": [], "upstreamReferences": [], "incomingAssociations": [], "outgoingAssociations": [],
+                **SPECIAL_REL[iid]}
     if STATE["round"] == 2 and iid == 15:  # 2회차: 15번 연결됨 (해소)
-        return {"downstreamReferences": [{"id": 1}]}
+        return {"downstreamReferences": [ref(17)]}
     if STATE["round"] == 2 and iid == 14:  # 2회차: 14번 연결 끊김 (신규 미추적)
         return {"downstreamReferences": []}
     unl = {12, 15, 16, 18, 32, 41, 31002, 32005, 33001, 32099, 29990, 40021} | {20000 + i for i in range(0, 1200, 97)}
     if iid in unl:
         return {"downstreamReferences": [], "upstreamReferences": [], "incomingAssociations": [], "outgoingAssociations": []}
-    return {"downstreamReferences": [], "upstreamReferences": [{"id": 9}], "incomingAssociations": [], "outgoingAssociations": []}
+    return {"downstreamReferences": [], "upstreamReferences": [ref(17, "UpstreamTrackerItemReference")], "incomingAssociations": [], "outgoingAssociations": []}
 
 
 class H(BaseHTTPRequestHandler):
@@ -202,7 +241,7 @@ class Cb(H):
             iid = int(m.group(1))
             if iid == 42:
                 return self.send(500, {"m": "boom"})  # 항상 실패 → 확인불가
-            return self.send(200, {"itemId": iid, **relations(iid)})
+            return self.send(200, {"itemId": iid, **relations(iid, int(q.get("page", ["1"])[0]))})
         m = re.fullmatch(r"/cb/api/v3/items/(\d+)", p)
         if m:
             iid = int(m.group(1))
