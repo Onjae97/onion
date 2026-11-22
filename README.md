@@ -7,3 +7,6 @@
 | [excel-merger](excel-merger/) | 폴더 안의 엑셀 파일들을 하나로 합치기 | Python, pandas |
 | [qa-automation](qa-automation/) | TC 생성 자동화(Spec 분석 → Test Case → Test Suite 엑셀)와 TC 수행 자동화(검수 리포트, 수행은 예정) | Claude Code 스킬, Python, openpyxl |
 | [CA-automation](CA-automation/) | CM 형상 감사(CA) 대비 자동화 — 추적성 Gap Matrix(Codebeamer 전수 조사 → 엑셀) | Python, Playwright, openpyxl |
+
+## 규칙
+- [rules/aspice-law.md](rules/aspice-law.md) — ASPICE 업무 공통 규칙 (AI 에이전트·사람 공용)
