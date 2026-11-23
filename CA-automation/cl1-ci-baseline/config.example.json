@@ -1,0 +1,34 @@
+{
+  "project": "MYPROJECT",
+  "confluence": {
+    "base": "https://confluence.example.com",
+    "ci_list_page_id": "000000000",
+    "login_path": "/login.action"
+  },
+  "codebeamer": {
+    "base": "https://codebeamer.example.com/cb",
+    "login_path": "/login.spr"
+  },
+  "ci_list": {
+    "pbl_header": "PBL",
+    "pbl_fallback_column": "O",
+    "pbl_only": true
+  },
+  "cl1": {
+    "baseline": {
+      "project_id": "000",
+      "keywords": ["ADCU50"],
+      "name_must_contain": ["PBL"],
+      "header_keyword": "산출물"
+    },
+    "similar_ratio": 0.9
+  },
+  "browser": {
+    "channel": "chrome"
+  },
+  "batch_size": 10,
+  "output_dir": "output",
+  "excel": {
+    "visible": true
+  }
+}
