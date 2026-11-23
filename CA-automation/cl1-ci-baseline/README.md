@@ -1,4 +1,4 @@
-# CL1 점검 — CI 저장소 관리 · Baseline 포함 (v1.0)
+# CL1 점검 — CI 저장소 관리 · Baseline 포함 (v1.1)
 
 체크리스트 **CL1** 자동화. CI list의 CI마다 두 가지를 확인합니다.
 
@@ -36,7 +36,7 @@
   - Codebeamer의 다른 화면(문서 등) → 화면에 CI name이 있는지
   - SVN·Git·공유 폴더 등 → **수동 확인** (자동 확인 미지원)
 - **② Baseline**
-  - Baselines 화면에서 이름에 `keywords` + `name_must_contain`이 모두 든 Baseline 중 **최신**(이름의 날짜 → 목록 순서) 1개
+  - Baselines 화면에서(행마다 숨어 있는 Baseline 정보·Description을 읽음 — 속성 화면을 따로 열지 않음) 이름에 `keywords` + `name_must_contain`이 모두 든 Baseline 중 **최신**(이름의 날짜 → 목록 순서) 1개
   - 그 Baseline의 Description 표에서 `산출물` 헤더 아래 이름 목록과 CI name 비교, 버전 무시
 - **이름 비교**: 대소문자·공백·기호·줄바꿈 차이는 같은 이름. 철자 유사도 90% 이상(예: `ADCU50` vs `ADCU50S`, 오타 `Specfication`)은 **OK(유사)** 로 표시 → 같은 산출물인지 사람이 확인
 

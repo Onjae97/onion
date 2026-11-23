@@ -1,7 +1,7 @@
 ---
 name: cl1-ci-baseline
 description: CI list의 CI가 등록 저장소에서 실제로 관리되는지, 최신 PBL Baseline 대상 산출물에 포함되는지 점검해 CL1 결과 엑셀을 만든다. CA 체크리스트 CL1, 저장소 관리·Baseline 포함 확인 요청 시 사용.
-version: 1.0
+version: 1.1
 ---
 
 # CL1 점검 — CI 저장소 관리 · Baseline 포함
@@ -23,9 +23,12 @@ AI 에이전트(Claude·Codex 등)가 이 도구를 실행·수정할 때 따르
 5. **이름 비교**: 소문자·영문/숫자/한글만 남겨 같으면 일치. 철자 유사도 ≥ `similar_ratio`(0.9)는 **OK(유사)** — `ADCU50`/`ADCU50S`처럼 다른 제품일 수 있으므로 자동 OK로 확정하지 않고 '확인 필요' 탭에 남긴다.
 6. NOK 힌트(가장 비슷한 항목)는 유사도 60% 이상일 때만 적는다.
 
-## Baseline 읽는 순서 (Codebeamer 버전마다 다름 — 실측 전)
-1. `GET /api/v3/projects/{pid}/baselines` → 2. `GET /rest/project/{pid}/baselines` (description 포함 시 wiki 표 해석)
-3. 화면 `/project/{pid}/baselines`의 링크 → 상세 API(`/api/v3/baselines/{id}`, `/rest/baseline/{id}`, `/rest/document/{id}`) → 화면(행의 properties 링크, `/doc/{id}`, `/proj/doc/details.do?doc_id={id}`)
+## Baseline 읽는 순서
+**실측(2026-11-24, HL클레무브 Codebeamer)**: v3·이전 REST 목록 API는 404. Baselines 화면(`/project/{pid}/baselines`)의 행마다
+`<span class="metaData" data-baseline-id / -name / -created-timestamp / -owner / -url / -description>`이 있고,
+`data-baseline-description`에 Description 표(HTML)가 통째로 들어 있다 → **화면 한 번으로 목록·생성 시각·대상 산출물을 모두 얻는다.**
+1. `GET /api/v3/projects/{pid}/baselines` → 2. `GET /rest/project/{pid}/baselines` (다른 서버 대비, wiki 표 해석)
+3. 화면 metaData (현재 실제 경로) → 4. metaData가 없으면 화면 링크 → 상세 API → 속성 화면(`/proj/doc/details.do?doc_id={id}` 등)
 - 각 시도는 '조회 기록' 탭에 남긴다. `--doctor`는 받은 화면을 `state/debug/baseline_N.html`로 저장 → 실제 구조 확인용.
 - 수동 대안: `--baseline-id`, `--baseline-file`(Description 복사본, 탭/표/wiki 모두 해석).
 

@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from openpyxl import Workbook
 
-STATE = {"conf": False, "cb": False, "legacy_api": False}
+STATE = {"conf": False, "cb": False, "legacy_api": False, "meta": True}
 CRED = ("jae", "pw!23")
 CB = "http://127.0.0.1:8202/cb"
 LOGIN_FORM = """<html><body><form method="post" action="{act}">
@@ -62,9 +62,21 @@ BASELINES = [  # (이름, 문서 번호) — 화면 순서 = 최신이 위
 ]
 
 
+def _meta(n, d):
+    """실제 Codebeamer 화면처럼 행마다 숨은 정보(span.metaData)를 넣는다 (Description은 HTML 이스케이프)"""
+    import html as H
+    if not STATE["meta"]:
+        return ""
+    desc = DESC_HTML if d == 9705300 else "<div>old</div>"
+    ts = {9800000: 1795100000000, 9900000: 1795200000000, 9705300: 1794989240321, 9600000: 1792128926448}[d]
+    return (f'<span class="metaData" style="display: none;" data-baseline-id="{d}" data-baseline-created-timestamp="{ts}" '
+            f'data-baseline-name="{n}" data-baseline-url="/cb/wiki/revision/1?revision={d}" '
+            f'data-baseline-description="{H.escape(desc, quote=True)}"></span>')
+
+
 def baselines_html():
     rows = "".join(
-        f"<tr><td><a href='/cb/doc/{d}'>{n}</a><div class='desc'>Hover over here to see the description.</div></td>"
+        f"<tr><td>{_meta(n, d)}<a href='/cb/doc/{d}'>{n}</a><div class='desc'>Hover over here to see the description.</div></td>"
         f"<td><a href='/cb/userdata/1'>kitae_lee</a> Nov 18 17:07</td>"
         f"<td><a href='/cb/proj/doc/details.do?doc_id={d}&amp;orgDitchnetTabPaneId=document-properties'>props</a></td></tr>"
         for n, d in BASELINES)

@@ -51,7 +51,7 @@ print("=== doctor ===")
 assert C.main(["--config", str(tc), "--doctor"]) == 0
 assert list((root / "state" / "debug").glob("baseline_*.html")), "doctor가 화면을 저장해야 함"
 
-print("=== run 1: 화면(HTML)에서 Baseline 읽기 ===")
+print("=== run 1: 화면 숨은 정보(metaData)에서 Baseline 읽기 ===")
 assert C.main(["--config", str(tc)]) == 0
 ov, wb = overview(latest_out())
 assert "CI-MAN3-01" not in ov, "PBL 없는 CI는 제외"
@@ -69,6 +69,19 @@ nok = list(wb["NOK"].iter_rows(values_only=True))[1:]
 assert len(nok) == 5, nok
 print("   run 1 OK —", len(ov), "CI, NOK 행", len(nok))
 
+info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
+assert "metaData" in info["Baseline"] and "8개" in info["Baseline"], info["Baseline"]
+
+time.sleep(61)
+print("=== run 1b: metaData 없는 화면 → 링크·속성 화면에서 읽기 ===")
+M.STATE["meta"] = False
+assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01", "--ci", "CI-SWE6-01"]) == 0
+ov, wb = overview(latest_out())
+assert (ov["CI-SYS1-01"]["② Baseline 포함"], ov["CI-SWE6-01"]["② Baseline 포함"]) == ("OK", "NOK"), ov
+info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
+assert "details.do" in info["Baseline"], info["Baseline"]
+print("   run 1b OK")
+
 time.sleep(61)  # 결과 파일명(분 단위) 구분
 print("=== run 2: 이전 REST API(wiki description) ===")
 M.STATE["legacy_api"] = True
@@ -76,7 +89,7 @@ assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01", "--ci", "CI-SWE1-01"])
 ov, wb = overview(latest_out())
 assert ov["CI-SYS1-01"]["② Baseline 포함"] == "OK" and ov["CI-SWE1-01"]["② Baseline 포함"] == "NOK", ov
 info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
-assert "목록 API" in info["Baseline"] and "3개" in info["Baseline"], info["Baseline"]
+assert "rest/project" in info["Baseline"] and "3개" in info["Baseline"], info["Baseline"]
 print("   run 2 OK")
 
 time.sleep(61)

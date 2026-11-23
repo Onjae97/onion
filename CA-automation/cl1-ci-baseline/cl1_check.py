@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state"
 
@@ -725,6 +725,37 @@ def baselines_from_api(cl, pid, tried):
     return []
 
 
+class _BaselineMeta(HTMLParser):
+    """Codebeamer Baselines 화면의 행마다 있는 숨은 정보
+    <span class="metaData" data-baseline-id=… data-baseline-name=… data-baseline-created-timestamp=…
+          data-baseline-url=… data-baseline-description="(Description HTML, 표 포함)">  (실측 2026-11-24)"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+
+    def handle_starttag(self, tag, attrs):
+        at = dict(attrs)
+        if at.get("data-baseline-name"):
+            self.out.append(at)
+
+
+def baselines_from_meta(html):
+    p = _BaselineMeta()
+    try:
+        p.feed(html or "")
+    except Exception:  # noqa
+        pass
+    out = []
+    for i, at in enumerate(p.out):
+        ts = at.get("data-baseline-created-timestamp") or ""
+        out.append({"id": str(at.get("data-baseline-id") or ""), "name": at["data-baseline-name"].strip(), "order": i,
+                    "source": "화면(metaData)", "created": int(ts) if ts.isdigit() else None,
+                    "by": at.get("data-baseline-owner", ""), "desc": at.get("data-baseline-description"),
+                    "links": [at["data-baseline-url"]] if at.get("data-baseline-url") else []})
+    return out
+
+
 def baselines_from_html(fetch_text, cb_base, pid, tried, keywords):
     """Baselines 화면(/project/{pid}/baselines)의 표에서 이름·링크를 읽는다."""
     url = f"{cb_base}/project/{pid}/baselines"
@@ -733,6 +764,10 @@ def baselines_from_html(fetch_text, cb_base, pid, tried, keywords):
     tried.append(f"화면 {url} → HTTP {s}{' (로그인 화면)' if login else ''}")
     if s != 200 or login:
         return [], html
+    meta = [b for b in baselines_from_meta(html) if all(k.lower() in b["name"].lower() for k in keywords)]
+    if meta:
+        tried.append(f"   화면 숨은 정보(metaData)에서 '{' '.join(keywords)}' Baseline {len(meta)}건")
+        return meta, html
     out, seen = [], set()
     for rows in html_tables(html):
         for row in rows:
@@ -750,9 +785,9 @@ def baseline_desc(cl, fetch_text, cb_base, b, header_kw, tried, debug):
     """선택한 Baseline의 Description 표 → [(이름, 버전)], 출처 설명"""
     if b.get("desc"):
         rows = parse_baseline_desc(b["desc"], header_kw)
-        tried.append(f"Description(목록 응답) → {len(rows)}행")
+        tried.append(f"Description({b.get('source', '목록')}) → {len(rows)}행")
         if rows:
-            return rows, "목록 API의 description"
+            return rows, f"{b.get('source', '목록')}의 description"
     bid = b.get("id")
     if bid:
         for path in (f"/api/v3/baselines/{bid}", f"/rest/baseline/{bid}", f"/rest/document/{bid}"):
