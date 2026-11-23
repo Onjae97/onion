@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.6"
+VERSION = "1.8"
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state"
 
@@ -125,11 +125,21 @@ def type_ids(item):
     return ids
 
 
+# 유형 이름의 다른 표기 (API가 한글로 돌려주는 경우). 실제 사례: categories가 '정보'로 반환된 Tracker가 있음
+TYPE_ALIASES = {"정보": "information"}
+
+
 def name_excluded(name, exclude):
     """유형 이름이 제외 대상인지. Codebeamer API가 Meaning을 주지 않으므로 이름으로 판단하되,
-    오타(예: 'Infomation')도 잡도록 철자 유사도 0.85 이상이면 같은 것으로 본다."""
+    오타(예: 'Infomation')도 잡도록 철자 유사도 0.85 이상이면 같은 것으로 본다.
+    한글 표기('정보')는 TYPE_ALIASES로 영문 이름에 맞춘다 (norm은 한글을 지우므로 먼저 확인)."""
     import difflib
-    n = norm(name)
+    raw = str(name or "").strip()
+    if raw in TYPE_ALIASES:
+        raw = TYPE_ALIASES[raw]
+    if raw.lower() in exclude or raw in exclude:
+        return True
+    n = norm(raw)
     if not n:
         return False
     return any(n == norm(e) or difflib.SequenceMatcher(None, n, norm(e)).ratio() >= 0.85 for e in exclude)
@@ -176,6 +186,20 @@ def excluded_option_ids(options, exclude):
 def rel_count(rel):
     """Up/Downstream Reference + incoming/outgoing Association 개수 합"""
     return sum(len(v) for v in (rel or {}).values() if isinstance(v, list))
+
+
+def rel_targets(rel):
+    """연결 상대 Item 번호 목록. Codebeamer v3 응답: 각 연결 = {id: 연결 번호, itemRevision: {id: 상대 Item 번호}, type}.
+    상대 번호를 찾지 못한 연결은 None (추측하지 않음 → 판정 불가 처리)."""
+    out = []
+    for v in (rel or {}).values():
+        if not isinstance(v, list):
+            continue
+        for x in v:
+            x = x if isinstance(x, dict) else {}
+            iid = (x.get("itemRevision") or {}).get("id") or (x.get("item") or {}).get("id")
+            out.append(int(iid) if iid is not None else None)
+    return out
 
 
 def coverage(denom, unlinked):
@@ -597,12 +621,59 @@ def _dist(items):
     return " · ".join(f"{k} {v}" for k, v in sorted(d.items(), key=lambda x: -x[1]))
 
 
-def check_ci(cl, ci, exclude, sample=10, scope_mode="top_with_descendants"):
+def counterpart_types(cl, ids, known, cache):
+    """연결 상대 Item의 유형 확인. known(같은 범위 Item) → cache(이번 실행에서 조회한 것) → 상세 GET 순.
+    반환: {id: item dict 또는 None(조회 실패)}"""
+    need = sorted({i for i in ids if i is not None and i not in known and i not in cache})
+    if need:
+        for i, (ok, v) in zip(need, cl.get_many([f"/api/v3/items/{i}" for i in need])):
+            cache[i] = v if ok and isinstance(v, dict) else None
+    return {i: (known[i] if i in known else cache.get(i)) for i in ids if i is not None}
+
+
+def judge_links(tids, types, exclude):
+    """연결 상대 번호(tids)와 유형으로 판정.
+    'linked' = Folder·Information이 아닌 상대가 1개 이상 / 'only_excluded' = 상대가 모두 Folder·Information
+    / 'unknown' = 유효한 상대가 없고, 번호나 유형을 확인하지 못한 상대가 있음 / 'none' = 연결 0개"""
+    if not tids:
+        return "none"
+    unresolved = False
+    for i in tids:
+        it = types.get(i) if i is not None else None
+        if it is None:
+            unresolved = True
+        elif not is_excluded(it, exclude):
+            return "linked"
+    return "unknown" if unresolved else "only_excluded"
+
+
+def rel_rest_pages(cl, iid, first, max_pages=200):
+    """relations 응답이 여러 페이지면(isLastPage=false) 나머지 페이지를 받아 합친다. 실패하면 None."""
+    merged = {k: list(v) for k, v in first.items() if isinstance(v, list)}
+    v, n = first, int(first.get("page") or 1)
+    size = first.get("pageSize")
+    while v.get("isLastPage") is False:
+        n += 1
+        if n > max_pages:
+            return None
+        q = f"?page={n}" + (f"&pageSize={size}" if size else "")
+        ok, v = cl.get_many([f"/api/v3/items/{iid}/relations{q}"])[0]
+        if not ok or not isinstance(v, dict):
+            return None
+        for k, lst in v.items():
+            if isinstance(lst, list):
+                merged.setdefault(k, []).extend(lst)
+    return merged
+
+
+def check_ci(cl, ci, exclude, sample=10, scope_mode="top_with_descendants", type_cache=None):
     """CI 1개 판정 (CI의 Tracker 범위 전체). 실패 시 status='확인불가: …'"""
     import random
+    type_cache = {} if type_cache is None else type_cache
     r = dict(ci, key=ci.get("trackerKey", ""), keymap={}, total=0, excluded=0, denom=0,
              unlinked=[], unknown=[], status="완료", dist_target="", dist_excl="", sample=[],
-             scope_root="", scope_name="", scope_note="", trackers=[], unset=[])
+             scope_root="", scope_name="", scope_note="", trackers=[], unset=[],
+             only_excluded=[], unknown_reason={})
     if not ci["trackerId"]:
         r["status"] = "확인불가: Path in Repository에서 Tracker 번호를 찾을 수 없음"
         return r
@@ -643,17 +714,47 @@ def check_ci(cl, ci, exclude, sample=10, scope_mode="top_with_descendants"):
         r["dist_target"] = _dist(targets)
         r["dist_excl"] = _dist([it for it in items if is_excluded(it, exclude)])
         res = cl.get_many([f"/api/v3/items/{it['id']}/relations" for it in targets])
+        # 연결 상대의 유형 확인 (상대가 Folder·Information이면 유효한 연결이 아님)
+        known = {int(it["id"]): it for it in items}
+        rels = {it["id"]: (rel_targets(v) if ok else None) for it, (ok, v) in zip(targets, res)}
+        # 같은 범위 안에서 유효한 상대가 이미 확인된 Item은 바깥 상대의 유형 조회를 생략
+        need = []
+        for tids in rels.values():
+            if tids and not any(i in known and not is_excluded(known[i], exclude) for i in tids if i is not None):
+                need += tids
+        types = counterpart_types(cl, need, known, type_cache)
+        types.update({i: known[i] for tids in rels.values() for i in (tids or []) if i in known})
+        verdicts = {it["id"]: (judge_links(rels[it["id"]], types, exclude) if ok else "fail") for it, (ok, v) in zip(targets, res)}
+        # 첫 페이지에서 유효한 연결을 못 찾았고 다음 페이지가 있으면 → 나머지 페이지까지 확인 (관계 Pagination 끝까지)
+        more = []
+        for it, (ok, v) in zip(targets, res):
+            if ok and verdicts[it["id"]] != "linked" and isinstance(v, dict) and v.get("isLastPage") is False:
+                full = rel_rest_pages(cl, it["id"], v)
+                if full is None:
+                    verdicts[it["id"]] = "unknown"
+                else:
+                    rels[it["id"]] = rel_targets(full)
+                    more.append(it["id"])
+        if more:
+            types.update(counterpart_types(cl, [i for x in more for i in rels[x]], known, type_cache))
+            for x in more:
+                verdicts[x] = judge_links(rels[x], types, exclude)
         linked = []
         for it, (ok, v) in zip(targets, res):
             ti = tinfo[tid_of(it)]
+            verdict = verdicts[it["id"]]
             if ti["has_type"] and type_unset(it):  # Type '--' : 판정은 그대로, 따로 집계·표시
                 r["unset"].append(it["id"]); ti["unset"] += 1
-                if ok and rel_count(v) == 0:
+                if verdict in ("none", "only_excluded"):
                     ti["unset_unlinked"] += 1
-            if not ok:
+            if verdict in ("fail", "unknown"):
                 r["unknown"].append(it["id"]); ti["unknown"] += 1
-            elif rel_count(v) == 0:
+                r["unknown_reason"][it["id"]] = ("연결 조회 실패" if verdict == "fail" else
+                                                 "연결 상대의 Item 번호 또는 유형을 확인하지 못함 (유효한 연결 미확인)")
+            elif verdict in ("none", "only_excluded"):
                 r["unlinked"].append(it["id"]); ti["unlinked"] += 1; ti["denom"] += 1
+                if verdict == "only_excluded":
+                    r["only_excluded"].append(it["id"])
             else:
                 linked.append((it["id"], rel_count(v), type_of(it))); ti["denom"] += 1
         rnd = random.Random(f"{ci['trackerId']}-{time.strftime('%Y%m%d')}")
@@ -722,8 +823,8 @@ def build_workbook(results, meta, prev, cb_base):
                                  "제외(Folder/Information)", "확인불가", "상태", "Path in Repository",
                                  "전체 Item", "판정 대상 유형 분포", "제외 유형 분포",
                                  "검사 범위(최상위 Tracker)", "Tracker 수", "범위 메모",
-                                 "Type 미지정(--)", "미추적 중 Type 미지정(--)"],
-               [22, 10, 10, 40, 12, 14, 9, 12, 14, 10, 26, 55, 10, 40, 40, 40, 10, 50, 14, 18])
+                                 "Type 미지정(--)", "미추적 중 Type 미지정(--)", "미추적 중 Folder/Information에만 연결"],
+               [22, 10, 10, 40, 12, 14, 9, 12, 14, 10, 26, 55, 10, 40, 40, 40, 10, 50, 14, 18, 20])
     for r in results:
         cov = coverage(r["denom"], len(r["unlinked"])) if r["status"] == "완료" or r["status"].startswith("일부") else None
         ov.append([r["ciId"], r["category"], None, r["ciName"], r["author"],
@@ -732,7 +833,8 @@ def build_workbook(results, meta, prev, cb_base):
                    r["total"] if cov is not None else None, r.get("dist_target", ""), r.get("dist_excl", ""),
                    None, len(r.get("trackers") or []) or None, r.get("scope_note", ""),
                    (len(r.get("unset") or []) if cov is not None else None),
-                   (len(set(r.get("unset") or []) & set(r["unlinked"])) if cov is not None else None)])
+                   (len(set(r.get("unset") or []) & set(r["unlinked"])) if cov is not None else None),
+                   (len(r.get("only_excluded") or []) if cov is not None else None)])
         row = ov.max_row
         link(ov.cell(row, 3), f"#{quote_sheetname(names[r['category']])}!A1", names[r["category"]])
         link(ov.cell(row, 12), r["path"])
@@ -751,12 +853,15 @@ def build_workbook(results, meta, prev, cb_base):
 
     # Category 탭 (사용자 양식: CI ID / CI name / Author / Path in Repository / Item ID)
     for c in cats:
-        ws = sheet(wb, names[c], ["CI ID", "CI name", "Author", "Path in Repository", "Item ID", "비고"], [22, 40, 12, 55, 24, 18])
+        ws = sheet(wb, names[c], ["CI ID", "CI name", "Author", "Path in Repository", "Item ID", "비고"], [22, 40, 12, 55, 24, 30])
         for r in [x for x in results if x["category"] == c]:
             unset = set(r.get("unset") or [])
+            only_ex = set(r.get("only_excluded") or [])
             for iid in sorted(r["unlinked"]):
-                ws.append([r["ciId"], r["ciName"], r["author"], None, None, "Type 미지정(--)" if iid in unset else None])
-                if iid in unset:
+                note = " · ".join(x for x in ("Type 미지정(--)" if iid in unset else "",
+                                              "Folder/Information에만 연결" if iid in only_ex else "") if x)
+                ws.append([r["ciId"], r["ciName"], r["author"], None, None, note or None])
+                if note:
                     ws.cell(ws.max_row, 6).fill = PatternFill("solid", fgColor="FFF2CC")
                 link(ws.cell(ws.max_row, 4), r["path"])
                 link(ws.cell(ws.max_row, 5), f"{cb_base}/issue/{iid}", item_label(r, iid))
@@ -812,7 +917,7 @@ def build_workbook(results, meta, prev, cb_base):
         if r["status"].startswith("확인불가"):
             uk.append([r["ciId"], r["category"], "", r["status"]])
         for iid in r["unknown"]:
-            uk.append([r["ciId"], r["category"], item_label(r, iid), "연결 조회 실패"])
+            uk.append([r["ciId"], r["category"], item_label(r, iid), (r.get("unknown_reason") or {}).get(iid, "연결 조회 실패")])
     finish(uk)
 
     # 실행정보
@@ -981,6 +1086,8 @@ def main(argv=None):
     ap.add_argument("--ci", action="append", help="이 CI ID만 검사 (여러 번 지정 가능)")
     ap.add_argument("--limit", type=int, help="앞에서 N개 CI만 (시험용)")
     ap.add_argument("--headless", action="store_true", help="브라우저 창 숨김 (로그인 저장된 뒤에만)")
+    ap.add_argument("--quick", action="store_true",
+                    help="빠른 검사: CI list에 적힌 Tracker 하나만 검사 (하위 Tracker 제외). 결과는 참고용 — CA 근거는 전체 검사로")
     ap.add_argument("--config", default=str(HERE / "config.json"))
     ap.add_argument("--set-login", action="store_true", help="로그인 ID/PW 저장 (Windows 자격 증명 관리자)")
     ap.add_argument("--clear-login", action="store_true", help="저장된 로그인 정보 삭제")
@@ -1001,10 +1108,12 @@ def main(argv=None):
     out_dir = (HERE / cfg.get("output_dir", "output"))
     out_dir.mkdir(exist_ok=True)
     exclude = {t.lower() for t in cfg["judge"]["exclude_types"]}
+    scope = "tracker_only" if a.quick else cfg.get("scope", "top_with_descendants")
     t0 = time.time()
 
     from playwright.sync_api import sync_playwright
-    log(f"AUTO-001 추적성 Gap Matrix v{VERSION} 시작{' (점검 모드)' if a.doctor else ''}")
+    log(f"AUTO-001 추적성 Gap Matrix v{VERSION} 시작{' (점검 모드)' if a.doctor else ''}"
+        f"{' — 빠른 검사(CI list에 적힌 Tracker만, 하위 Tracker 제외)' if a.quick else ''}")
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             str(STATE / "browser-profile"), channel=cfg["browser"].get("channel") or None,
@@ -1069,7 +1178,7 @@ def main(argv=None):
                     want = input().strip()
                     c = next((x for x in cis if x["ciId"] == want and x["trackerId"]), first)
                 t = ccb.get(f"/api/v3/trackers/{c['trackerId']}")
-                mode = cfg.get("scope", "top_with_descendants")
+                mode = scope
                 sc = resolve_scope(ccb, c["trackerId"], mode)
                 log(f"  검사 범위({mode}): 최상위 '{sc['root_name']}'({sc['root']}) · Tracker {len(sc['trackers'])}개 {('— ' + sc['note']) if sc['note'] else ''}")
                 for x in sc["trackers"][:30]:
@@ -1110,13 +1219,36 @@ def main(argv=None):
                 if tgt:
                     rel = ccb.get(f"/api/v3/items/{tgt['id']}/relations")
                     log(f"  연결 조회 필드: {', '.join(rel.keys())}")
+                    # 연결 상대 번호를 읽을 수 있는지 (상대 유형 판정의 전제) — 연결이 있는 Item을 최대 20개 확인
+                    shown = False
+                    for it in [x for x in items if not is_excluded(x, exclude, excl_ids)][:20]:
+                        rv = rel if it is tgt else ccb.get(f"/api/v3/items/{it['id']}/relations")
+                        tids = rel_targets(rv)
+                        if not tids:
+                            continue
+                        first_ref = next(x for v in rv.values() if isinstance(v, list) and v for x in v)
+                        log(f"  연결 1건의 구조: {', '.join(sorted(first_ref.keys())) if isinstance(first_ref, dict) else type(first_ref).__name__}")
+                        if None in tids:
+                            log("  ⚠ 연결 상대 Item 번호를 응답에서 찾지 못했습니다 → 이 상태로 실행하면 해당 Item이 확인불가가 됩니다. 이 줄을 Claude에게 전달해 주세요.")
+                        else:
+                            kn = {int(x["id"]): x for x in items}
+                            ty = counterpart_types(ccb, tids, kn, {})
+                            log(f"  연결 상대 확인: Item {it['id']} → " + ", ".join(
+                                f"{i}({type_of(ty[i]) or '유형 없음'})" if ty.get(i) else f"{i}(조회 실패)" for i in tids[:5])
+                                + " → 판정: " + {"linked": "연결", "only_excluded": "미추적(Folder/Information에만 연결)",
+                                                 "unknown": "확인불가", "none": "미추적"}[judge_links(tids, ty, exclude)])
+                        shown = True
+                        break
+                    if not shown:
+                        log("  (앞쪽 Item 20개에 연결이 없어 연결 상대 확인은 건너뜀)")
                 log("✔ 점검 완료 — 이제 run_traceability.bat 으로 전체 실행하세요.")
                 return 0
 
             results = []
+            type_cache = {}  # 연결 상대 유형 — 이번 실행 안에서만 재사용
             for n, c in enumerate(cis, 1):
                 t1 = time.time()
-                r = check_ci(ccb, c, exclude, cfg.get("verify_sample", 10), cfg.get("scope", "top_with_descendants"))
+                r = check_ci(ccb, c, exclude, cfg.get("verify_sample", 10), scope, type_cache)
                 results.append(r)
                 cov = coverage(r["denom"], len(r["unlinked"]))
                 if r.get("scope_note"):
@@ -1127,7 +1259,8 @@ def main(argv=None):
             ctx.close()
 
     # ⑤ 엑셀
-    prev_path = STATE / "last_run.json"
+    # 변동 비교 기준은 검사 방식별로 따로 둔다 (빠른 검사가 전체 검사 기준을 덮어쓰거나 섞이지 않게)
+    prev_path = STATE / ("last_run_quick.json" if a.quick else "last_run.json")
     prev = json.loads(prev_path.read_text(encoding="utf-8")) if prev_path.exists() else None
     meta = {
         "실행 시각": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1137,15 +1270,18 @@ def main(argv=None):
                  + (" (일부 CI만 지정 실행)" if a.ci or a.limit else ""),
         "검사 범위": {"top_with_descendants": "등록 Tracker의 최상위 Tracker와 그 아래 하위 Tracker 전부",
                    "with_descendants": "등록 Tracker와 그 아래 하위 Tracker 전부",
-                   "tracker_only": "등록 Tracker만"}.get(cfg.get("scope", "top_with_descendants"), cfg.get("scope")),
+                   "tracker_only": "등록 Tracker만"}.get(scope, scope)
+                 + (" — 빠른 검사(--quick): 참고용, CA 근거는 전체 검사 결과 사용" if a.quick else ""),
         "Type 미지정(--)": "판정 대상에 포함 (화면 필터와 동일). 결과에서 따로 집계·표시 — Overview·Tracker별 열, Category 탭 비고",
-        "판정 규칙": "Item 유형(Type 선택지 이름, 철자 유사 포함) Folder·Information 제외 / Up·Downstream Reference + Association 1개 이상 = 연결 (취소·폐기 항목과의 연결 포함) / 조회 실패 = 확인불가",
+        "판정 규칙": "Item 유형(Type 선택지 이름, 철자 유사·한글 '정보' 포함) Folder·Information 제외 / Up·Downstream Reference + Association 중 "
+                     "Folder·Information이 아닌 상대와의 연결 1개 이상 = 연결 (취소·폐기 항목과의 연결 포함) / 상대가 모두 Folder·Information = 미추적 / "
+                     "조회 실패·상대 확인 불가 = 확인불가",
         "직전 비교 기준": prev.get("run_at", "-") if prev else "없음",
         "소요 시간": f"{time.time() - t0:.0f}초",
         "주의": "자동 생성 초안입니다. 공식 산출물 반영·저장은 담당자가 검토 후 직접 합니다.",
     }
     wb = build_workbook(results, meta, prev, cfg["codebeamer"]["base"])
-    out = out_dir / f"추적성_GapMatrix_{cfg.get('project', '')}_{time.strftime('%Y-%m-%d_%H%M')}.xlsx"
+    out = out_dir / f"추적성_GapMatrix_{cfg.get('project', '')}_{time.strftime('%Y-%m-%d_%H%M')}{'_quick' if a.quick else ''}.xlsx"
     wb.save(out)
     if not (a.ci or a.limit):
         prev_path.write_text(json.dumps({"run_at": meta["실행 시각"], "cis": {

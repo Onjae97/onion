@@ -17,7 +17,8 @@
   "judge": {
     "exclude_types": [
       "Folder",
-      "Information"
+      "Information",
+      "정보"
     ]
   },
   "browser": {
