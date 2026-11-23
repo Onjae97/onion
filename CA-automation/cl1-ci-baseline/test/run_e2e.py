@@ -100,4 +100,26 @@ assert C.main(["--config", str(tc), "--ci", "CI-SWE6-01", "--baseline-file", str
 ov, _ = overview(latest_out())
 assert ov["CI-SWE6-01"]["② Baseline 포함"] == "OK", ov
 print("   run 3 OK")
+time.sleep(61)
+print("=== run 4: 화면 요청만 로그인 화면 → 브라우저로 직접 열어 재로그인 ===")
+M.STATE.update(meta=True, legacy_api=False, ui_need="2", ui_issue="2")
+before = M.STATE["ui_logins"]
+assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01"]) == 0
+ov, wb = overview(latest_out())
+assert ov["CI-SYS1-01"]["② Baseline 포함"] == "OK", ov
+assert M.STATE["ui_logins"] == before + 1, "화면 재로그인 1회"
+print("   run 4 OK")
+
+time.sleep(61)
+print("=== run 5: 재로그인해도 화면이 막히면 → 확인불가 + 화면 저장 ===")
+M.STATE.update(ui_need="never", ui_issue="3")
+for f in (root / "state" / "debug").glob("*.html"):
+    f.unlink()
+assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01"]) == 0
+ov, wb = overview(latest_out())
+assert ov["CI-SYS1-01"]["② Baseline 포함"] == "확인불가", ov
+assert list((root / "state" / "debug").glob("baseline_*.html")), "일반 실행에서도 실패 화면 저장"
+tried = [r[0] for r in wb["조회 기록"].iter_rows(values_only=True)]
+assert any("로그인 화면" in str(t) for t in tried), tried
+print("   run 5 OK")
 print("ALL PASS")

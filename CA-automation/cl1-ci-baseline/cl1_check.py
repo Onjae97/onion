@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state"
 
@@ -376,6 +376,15 @@ JS_BYTES = """async (u) => {
 }"""
 
 
+def is_login_html(html, url=""):
+    """로그인 화면인가: 비밀번호 입력칸이 있고, 주소나 폼이 로그인용 (전자서명 창 등의 비밀번호 칸과 구분)"""
+    if not re.search(r"<input[^>]*type=[\"']?password", html or "", re.I):
+        return False
+    return bool(re.search(r"log_?in|signin|sso", url or "", re.I)
+                or re.search(r"<form[^>]*action=[\"'][^\"']*(log_?in|signin|sso|j_security)", html or "", re.I)
+                or len(html or "") < 30000)
+
+
 JS_TEXT = """async (u) => {
   try {
     const r = await fetch(u, {credentials: 'include'});
@@ -419,9 +428,30 @@ class Session:
         return self._eval(JS_FETCH, urls)
 
     def fetch_text(self, url):
-        """화면(HTML) 그대로 받기 — Baseline 목록·속성 화면 해석용. 반환 (HTTP 코드, 본문, 최종 주소)"""
+        """화면(HTML) 그대로 받기 — Baseline 목록·속성 화면 해석용. 반환 (HTTP 코드, 본문, 최종 주소)
+        실측(2026-11-24): API는 로그인 상태인데 화면 요청만 로그인 화면이 오는 경우가 있음
+        → 새 탭에서 주소를 직접 열고, 로그인 화면이면 저장된 ID/PW로 로그인한 뒤 다시 연다."""
         r = self._eval(JS_TEXT, url)
-        return r.get("s", 0), r.get("t", ""), r.get("u", url)
+        s, t, u = r.get("s", 0), r.get("t", ""), r.get("u", url)
+        if s != 200 or not is_login_html(t, u):
+            return s, t, u
+        log(f"   {self.name} 화면 요청에 로그인 화면이 와서 브라우저로 직접 열어 다시 시도합니다")
+        pg = self.page.context.new_page()
+        try:
+            pg.goto(url, wait_until="load")
+            html, final = pg.content(), pg.url
+            if is_login_html(html, final) and self.cred:
+                log(f"   {self.name} 화면 다시 로그인 ({self.cred[0]})")
+                for lu in [x for x in (self.login_url, url) if x]:
+                    if self._fill_login(lu, pg):
+                        break
+                pg.goto(url, wait_until="load")
+                html, final = pg.content(), pg.url
+            return (401 if is_login_html(html, final) else 200), html, final
+        except Exception as e:  # noqa
+            return 0, str(e), url
+        finally:
+            pg.close()
 
     def fetch_bytes(self, url):
         r = self._eval(JS_BYTES, url)
@@ -431,15 +461,16 @@ class Session:
             raise ApiError(f"다운로드 실패 HTTP {r.get('s')}")
         return base64.b64decode(r["b64"])
 
-    def _fill_login(self, url):
-        self.page.goto(url, wait_until="domcontentloaded")
-        pwd = self.page.locator("input[type=password]").first
+    def _fill_login(self, url, page=None):
+        page = page or self.page
+        page.goto(url, wait_until="domcontentloaded")
+        pwd = page.locator("input[type=password]").first
         try:
             pwd.wait_for(state="visible", timeout=10000)
         except Exception:  # noqa
             return False
         form = pwd.locator("xpath=ancestor::form[1]")
-        scope = form if form.count() else self.page
+        scope = form if form.count() else page
         users = scope.locator("input[type=text], input[type=email], input:not([type])")
         user_box = next((users.nth(i) for i in range(users.count()) if users.nth(i).is_visible()), None)
         if user_box is None:
@@ -448,7 +479,7 @@ class Session:
         pwd.fill(self.cred[1])
         pwd.press("Enter")
         try:
-            self.page.wait_for_load_state("load", timeout=30000)
+            page.wait_for_load_state("load", timeout=30000)
         except Exception:  # noqa
             pass
         time.sleep(1.5)
@@ -760,7 +791,7 @@ def baselines_from_html(fetch_text, cb_base, pid, tried, keywords):
     """Baselines 화면(/project/{pid}/baselines)의 표에서 이름·링크를 읽는다."""
     url = f"{cb_base}/project/{pid}/baselines"
     s, html, final = fetch_text(url)
-    login = bool(re.search(r"type=[\"']?password", html or "", re.I))
+    login = s == 401 or is_login_html(html, final)
     tried.append(f"화면 {url} → HTTP {s}{' (로그인 화면)' if login else ''}")
     if s != 200 or login:
         return [], html
@@ -934,7 +965,7 @@ def check_repo(ci, kind, ccb, ccf, cbs, cfg, similar):
     s, html, final = cbs.fetch_text(ci["path"])
     if s == 404:
         return dict(r, result="NOK", reason="Codebeamer 경로가 없음 (HTTP 404)")
-    if s != 200 or re.search(r"type=[\"']?password", html or "", re.I):
+    if s != 200 or is_login_html(html, final):
         return dict(r, result="확인불가", reason=f"Codebeamer 경로 조회 실패 (HTTP {s})")
     t = re.search(r"<title[^>]*>(.*?)</title>", html or "", re.I | re.S)
     title = re.sub(r"\s+", " ", t.group(1)).strip() if t else ""
@@ -1206,10 +1237,12 @@ def main(argv=None):
             if base["rows"]:
                 log(f"4. Baseline '{base['name']}' — 대상 산출물 {len(base['rows'])}개 ({base['from']})")
             else:
+                for i, (u, st, html) in enumerate(debug):
+                    (STATE / "debug" / f"baseline_{i + 1}.html").write_text(html or "", encoding="utf-8")
                 log("4. ⚠ Baseline 내용을 읽지 못했습니다 — ② Baseline 포함은 전부 확인불가로 남깁니다")
                 for t in tried:
                     log(f"     · {t}")
-                log("     → config.json의 cl1.baseline 조건 확인, 또는 --baseline-file 로 Description을 직접 지정")
+                log("     → state\\debug 폴더에 받은 화면을 저장했습니다 (Claude에게 전달). 급하면 --baseline-file 로 Description 직접 지정")
 
             if a.doctor:
                 for t in tried:

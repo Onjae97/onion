@@ -1,7 +1,7 @@
 ---
 name: cl1-ci-baseline
 description: CI list의 CI가 등록 저장소에서 실제로 관리되는지, 최신 PBL Baseline 대상 산출물에 포함되는지 점검해 CL1 결과 엑셀을 만든다. CA 체크리스트 CL1, 저장소 관리·Baseline 포함 확인 요청 시 사용.
-version: 1.1
+version: 1.2
 ---
 
 # CL1 점검 — CI 저장소 관리 · Baseline 포함
@@ -29,6 +29,7 @@ AI 에이전트(Claude·Codex 등)가 이 도구를 실행·수정할 때 따르
 `data-baseline-description`에 Description 표(HTML)가 통째로 들어 있다 → **화면 한 번으로 목록·생성 시각·대상 산출물을 모두 얻는다.**
 1. `GET /api/v3/projects/{pid}/baselines` → 2. `GET /rest/project/{pid}/baselines` (다른 서버 대비, wiki 표 해석)
 3. 화면 metaData (현재 실제 경로) → 4. metaData가 없으면 화면 링크 → 상세 API → 속성 화면(`/proj/doc/details.do?doc_id={id}` 등)
+- **화면 요청만 로그인 화면이 오는 경우(실측 2026-11-24, API는 정상)**: 새 탭에서 주소를 직접 열고 로그인 화면이면 저장된 ID/PW로 재로그인 후 다시 읽는다. 그래도 막히면 확인불가 + 화면을 `state/debug`에 저장(일반 실행 포함).
 - 각 시도는 '조회 기록' 탭에 남긴다. `--doctor`는 받은 화면을 `state/debug/baseline_N.html`로 저장 → 실제 구조 확인용.
 - 수동 대안: `--baseline-id`, `--baseline-file`(Description 복사본, 탭/표/wiki 모두 해석).
 

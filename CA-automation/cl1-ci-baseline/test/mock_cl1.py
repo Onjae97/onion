@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from openpyxl import Workbook
 
-STATE = {"conf": False, "cb": False, "legacy_api": False, "meta": True}
+STATE = {"conf": False, "cb": False, "legacy_api": False, "meta": True, "ui_need": None, "ui_issue": "1", "ui_logins": 0}
 CRED = ("jae", "pw!23")
 CB = "http://127.0.0.1:8202/cb"
 LOGIN_FORM = """<html><body><form method="post" action="{act}">
@@ -129,8 +129,18 @@ class Conf(H):
 class Cb(H):
     def do_POST(self):
         if (lambda f: (f.get("user"), f.get("password")))(_form(self)) == CRED:
-            STATE["cb"] = True
-        self.send_response(302); self.send_header("Location", "/cb/"); self.end_headers()
+            STATE["cb"] = True; STATE["ui_logins"] += 1
+            self.send_response(302); self.send_header("Set-Cookie", f"ui={STATE['ui_issue']}; Path=/")
+        else:
+            self.send_response(302)
+        self.send_header("Location", "/cb/"); self.end_headers()
+
+    def ui_expired(self):
+        """실측 재현: API는 로그인 상태인데 화면 요청만 로그인 화면(HTTP 200)을 돌려줌"""
+        if not STATE["ui_need"]:
+            return False
+        ck = dict(x.strip().split("=", 1) for x in (self.headers.get("Cookie") or "").split(";") if "=" in x)
+        return ck.get("ui") != STATE["ui_need"]
 
     def do_GET(self):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
@@ -153,6 +163,8 @@ class Cb(H):
         if p == "/cb/rest/project/171/baselines" and STATE["legacy_api"]:
             return self.send(200, [{"uri": f"/baseline/{d}", "name": n, "createdAt": f"2026-11-{19 if d == 9705300 else 1:02d}T08:00:00Z",
                                     "description": DESC_WIKI if d == 9705300 else "old"} for n, d in BASELINES if "SWQT" not in n])
+        if p == "/cb/project/171/baselines" and self.ui_expired():
+            return self.send(200, LOGIN_FORM.format(act="/cb/login.spr", u="user", p="password"), "text/html")
         if p == "/cb/project/171/baselines":
             return self.send(200, baselines_html(), "text/html")
         if p == "/cb/proj/doc/details.do" and q.get("doc_id") == ["9705300"]:
