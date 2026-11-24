@@ -1,0 +1,84 @@
+{
+  "project": "MYPROJECT",
+  "confluence": {
+    "base": "https://confluence.example.com",
+    "ci_list_page_id": "000000000",
+    "login_path": "/login.action"
+  },
+  "codebeamer": {
+    "base": "https://codebeamer.example.com/cb",
+    "login_path": "/login.spr"
+  },
+  "jira": {
+    "base": "https://jira.example.com",
+    "login_path": "/login.jsp"
+  },
+  "ci_list": {
+    "pbl_header": "PBL",
+    "pbl_fallback_column": "O",
+    "pbl_only": true
+  },
+  "cl3": {
+    "scope": "top_with_descendants",
+    "exclude_types": [
+      "Information",
+      "Folder"
+    ],
+    "accepted_statuses": [
+      "Accepted"
+    ],
+    "separate_statuses": [
+      "Obsolete",
+      "Rejected",
+      "Deleted"
+    ],
+    "review_prefix": "Review_",
+    "review_ok_ratio": 0.9,
+    "review_conditional_ratio": 0.8,
+    "defect": {
+      "resolved_statuses": [
+        "Closed",
+        "Resolved",
+        "Done",
+        "Fixed",
+        "Verified",
+        "Completed",
+        "Accepted",
+        "완료",
+        "종료",
+        "해결"
+      ],
+      "deferred_statuses": [
+        "Deferred",
+        "Postponed",
+        "On Hold",
+        "Suspended",
+        "보류",
+        "연기"
+      ],
+      "defect_tracker_keywords": [
+        "Defect",
+        "Bug",
+        "Issue",
+        "결함",
+        "이슈",
+        "Finding"
+      ],
+      "list_status_headers": [
+        "Status",
+        "상태",
+        "진행상태",
+        "조치상태",
+        "처리상태"
+      ]
+    }
+  },
+  "browser": {
+    "channel": "chrome"
+  },
+  "batch_size": 10,
+  "output_dir": "output",
+  "excel": {
+    "visible": true
+  }
+}
