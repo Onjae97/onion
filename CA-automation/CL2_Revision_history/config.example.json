@@ -1,0 +1,35 @@
+{
+  "project": "MYPROJECT",
+  "confluence": {
+    "base": "https://confluence.example.com",
+    "ci_list_page_id": "000000000",
+    "login_path": "/login.action"
+  },
+  "codebeamer": {
+    "base": "https://codebeamer.example.com/cb",
+    "login_path": "/login.spr"
+  },
+  "ci_list": {
+    "pbl_header": "PBL",
+    "pbl_fallback_column": "O",
+    "pbl_only": true
+  },
+  "cl2": {
+    "item_name_keywords": [
+      "Revision history",
+      "Revision histroy",
+      "개정 이력",
+      "변경 이력"
+    ],
+    "search_upper_trackers": true,
+    "page_size": 500
+  },
+  "browser": {
+    "channel": "chrome"
+  },
+  "batch_size": 10,
+  "output_dir": "output",
+  "excel": {
+    "visible": true
+  }
+}
