@@ -1,4 +1,4 @@
-# CL1 점검 — CI 저장소 관리 · Baseline 포함 (v1.0)
+# CL1 점검 — CI 저장소 관리 · Baseline 포함 (v1.6)
 
 체크리스트 **CL1** 자동화. CI list의 CI마다 두 가지를 확인합니다.
 
@@ -31,14 +31,15 @@
 - **대상 CI**: 최신 CI list에서 **PBL 값이 있는 CI 전부** (저장소 종류 무관 — Codebeamer가 아니어도 포함). `ci_list.pbl_only: false`면 전체
 - **① 저장소**
   - Codebeamer Tracker 경로(`/tracker/번호`) → Tracker 이름과 CI name 비교
+    - CI list에 **하위 Tracker**가 적혀 있으면 상위 Tracker(최상위까지) 이름으로 비교 — 추적성 도구와 같은 상위 기준. Overview `① 저장소에서 찾은 이름`에 `상위 이름 (번호) ← 등록: 하위 이름 (번호)`로 표시
     - 이름이 다르면, 같은 프로젝트에 **CI name과 같은 이름의 Tracker가 다른 곳에 있는지** 찾아 근거에 적음 (경로 오기 확인용)
   - Confluence 경로 → 페이지 제목(첨부 링크면 첨부 파일 존재) 비교
   - Codebeamer의 다른 화면(문서 등) → 화면에 CI name이 있는지
   - SVN·Git·공유 폴더 등 → **수동 확인** (자동 확인 미지원)
 - **② Baseline**
-  - Baselines 화면에서 이름에 `keywords` + `name_must_contain`이 모두 든 Baseline 중 **최신**(이름의 날짜 → 목록 순서) 1개
+  - Baselines 화면에서(행마다 숨어 있는 Baseline 정보·Description을 읽음 — 속성 화면을 따로 열지 않음) 이름에 `keywords` + `name_must_contain`이 모두 든 Baseline 중 **최신**(이름의 날짜 → 목록 순서) 1개
   - 그 Baseline의 Description 표에서 `산출물` 헤더 아래 이름 목록과 CI name 비교, 버전 무시
-- **이름 비교**: 대소문자·공백·기호·줄바꿈 차이는 같은 이름. 철자 유사도 90% 이상(예: `ADCU50` vs `ADCU50S`, 오타 `Specfication`)은 **OK(유사)** 로 표시 → 같은 산출물인지 사람이 확인
+- **이름 비교**: 대소문자·공백·기호·줄바꿈 차이는 같은 이름(100%). 철자 유사도 **90% 이상 OK / 80~90% Conditional OK(사람 확인) / 80% 미만 NOK**. Overview `① 유사도`·`② 유사도` 열에 표시. Baseline 항목은 다른 CI가 정확히 차지한 것이면 유사 일치 후보에서 제외(비슷한 이름의 다른 산출물에 잘못 걸리지 않게)
 
 ### 왜 `name_must_contain: ["PBL"]` 인가
 `adcu50`으로 검색하면 Tracker Baseline(예: `..._SWQT_...`)도 함께 나옵니다. 이것이 더 최근이면 대상 산출물 표가 없어 전부 NOK가 됩니다.
@@ -47,10 +48,10 @@
 ## 결과 엑셀
 | 탭 | 내용 |
 |---|---|
-| 요약 | ①②별 OK / OK(유사) / NOK / 확인불가 / 수동 확인 수, NOK CI 수, 사용한 Baseline(링크) |
+| 요약 | ①②별 OK / Conditional OK / NOK / 확인불가 / 수동 확인 수, NOK CI 수, 사용한 Baseline(링크) |
 | Overview | CI별 ①② 결과·근거, 저장소에서 찾은 이름, Baseline 항목·버전(참고), NOK 사유 |
 | NOK | NOK 항목만 (① 저장소 미관리 / ② Baseline 미포함) + 사유 |
-| 확인 필요 | OK(유사) · 확인불가 · 수동 확인 — 사람이 확인 후 마지막 열 기입 |
+| 확인 필요 | Conditional OK · 확인불가 · 수동 확인 — 사람이 확인 후 마지막 열 기입 |
 | Baseline | Baseline 대상 산출물 목록과 맞은 CI ID. 어떤 CI와도 안 맞은 항목은 노란색 |
 | Baseline 후보 | 조건에 맞은 Baseline 목록과 선택한 것 |
 | 조회 기록 | Baseline을 어떤 경로(API/화면)로 읽었는지 |
@@ -66,7 +67,7 @@
 |---|---|
 | `Baseline 내용을 읽지 못했습니다` | `doctor.bat` 실행 → `조회:` 줄과 `state\debug\baseline_*.html` 파일을 Claude에게 전달. 급하면 `--baseline-file` |
 | 엉뚱한 Baseline이 선택됨 | `Baseline 후보` 탭 확인 → config의 `keywords`·`name_must_contain` 조정, 또는 `--baseline-id` |
-| OK(유사)가 너무 많음/적음 | config의 `cl1.similar_ratio` (기본 0.9) 조정 |
+| Conditional OK가 너무 많음/적음 | config의 `cl1.ok_ratio`(0.9)·`cl1.conditional_ratio`(0.8) 조정 |
 | 그 밖의 문제 | `../traceability/README.md`의 '문제가 생기면' 표와 같음 (로그인·DRM·브라우저) |
 
 ## 파일 구성

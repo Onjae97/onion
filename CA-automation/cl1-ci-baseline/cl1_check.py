@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.6"
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state"
 
@@ -376,6 +376,15 @@ JS_BYTES = """async (u) => {
 }"""
 
 
+def is_login_html(html, url=""):
+    """로그인 화면인가: 비밀번호 입력칸이 있고, 주소나 폼이 로그인용 (전자서명 창 등의 비밀번호 칸과 구분)"""
+    if not re.search(r"<input[^>]*type=[\"']?password", html or "", re.I):
+        return False
+    return bool(re.search(r"log_?in|signin|sso", url or "", re.I)
+                or re.search(r"<form[^>]*action=[\"'][^\"']*(log_?in|signin|sso|j_security)", html or "", re.I)
+                or len(html or "") < 30000)
+
+
 JS_TEXT = """async (u) => {
   try {
     const r = await fetch(u, {credentials: 'include'});
@@ -419,9 +428,30 @@ class Session:
         return self._eval(JS_FETCH, urls)
 
     def fetch_text(self, url):
-        """화면(HTML) 그대로 받기 — Baseline 목록·속성 화면 해석용. 반환 (HTTP 코드, 본문, 최종 주소)"""
+        """화면(HTML) 그대로 받기 — Baseline 목록·속성 화면 해석용. 반환 (HTTP 코드, 본문, 최종 주소)
+        실측(2026-11-24): API는 로그인 상태인데 화면 요청만 로그인 화면이 오는 경우가 있음
+        → 새 탭에서 주소를 직접 열고, 로그인 화면이면 저장된 ID/PW로 로그인한 뒤 다시 연다."""
         r = self._eval(JS_TEXT, url)
-        return r.get("s", 0), r.get("t", ""), r.get("u", url)
+        s, t, u = r.get("s", 0), r.get("t", ""), r.get("u", url)
+        if s != 200 or not is_login_html(t, u):
+            return s, t, u
+        log(f"   {self.name} 화면 요청에 로그인 화면이 와서 브라우저로 직접 열어 다시 시도합니다")
+        pg = self.page.context.new_page()
+        try:
+            pg.goto(url, wait_until="load")
+            html, final = pg.content(), pg.url
+            if is_login_html(html, final) and self.cred:
+                log(f"   {self.name} 화면 다시 로그인 ({self.cred[0]})")
+                for lu in [x for x in (self.login_url, url) if x]:
+                    if self._fill_login(lu, pg):
+                        break
+                pg.goto(url, wait_until="load")
+                html, final = pg.content(), pg.url
+            return (401 if is_login_html(html, final) else 200), html, final
+        except Exception as e:  # noqa
+            return 0, str(e), url
+        finally:
+            pg.close()
 
     def fetch_bytes(self, url):
         r = self._eval(JS_BYTES, url)
@@ -431,15 +461,16 @@ class Session:
             raise ApiError(f"다운로드 실패 HTTP {r.get('s')}")
         return base64.b64decode(r["b64"])
 
-    def _fill_login(self, url):
-        self.page.goto(url, wait_until="domcontentloaded")
-        pwd = self.page.locator("input[type=password]").first
+    def _fill_login(self, url, page=None):
+        page = page or self.page
+        page.goto(url, wait_until="domcontentloaded")
+        pwd = page.locator("input[type=password]").first
         try:
             pwd.wait_for(state="visible", timeout=10000)
         except Exception:  # noqa
             return False
         form = pwd.locator("xpath=ancestor::form[1]")
-        scope = form if form.count() else self.page
+        scope = form if form.count() else page
         users = scope.locator("input[type=text], input[type=email], input:not([type])")
         user_box = next((users.nth(i) for i in range(users.count()) if users.nth(i).is_visible()), None)
         if user_box is None:
@@ -448,7 +479,7 @@ class Session:
         pwd.fill(self.cred[1])
         pwd.press("Enter")
         try:
-            self.page.wait_for_load_state("load", timeout=30000)
+            page.wait_for_load_state("load", timeout=30000)
         except Exception:  # noqa
             pass
         time.sleep(1.5)
@@ -725,14 +756,49 @@ def baselines_from_api(cl, pid, tried):
     return []
 
 
+class _BaselineMeta(HTMLParser):
+    """Codebeamer Baselines 화면의 행마다 있는 숨은 정보
+    <span class="metaData" data-baseline-id=… data-baseline-name=… data-baseline-created-timestamp=…
+          data-baseline-url=… data-baseline-description="(Description HTML, 표 포함)">  (실측 2026-11-24)"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+
+    def handle_starttag(self, tag, attrs):
+        at = dict(attrs)
+        if at.get("data-baseline-name"):
+            self.out.append(at)
+
+
+def baselines_from_meta(html):
+    p = _BaselineMeta()
+    try:
+        p.feed(html or "")
+    except Exception:  # noqa
+        pass
+    out = []
+    for i, at in enumerate(p.out):
+        ts = at.get("data-baseline-created-timestamp") or ""
+        out.append({"id": str(at.get("data-baseline-id") or ""), "name": at["data-baseline-name"].strip(), "order": i,
+                    "source": "화면(metaData)", "created": int(ts) if ts.isdigit() else None,
+                    "by": at.get("data-baseline-owner", ""), "desc": at.get("data-baseline-description"),
+                    "links": [at["data-baseline-url"]] if at.get("data-baseline-url") else []})
+    return out
+
+
 def baselines_from_html(fetch_text, cb_base, pid, tried, keywords):
     """Baselines 화면(/project/{pid}/baselines)의 표에서 이름·링크를 읽는다."""
     url = f"{cb_base}/project/{pid}/baselines"
     s, html, final = fetch_text(url)
-    login = bool(re.search(r"type=[\"']?password", html or "", re.I))
+    login = s == 401 or is_login_html(html, final)
     tried.append(f"화면 {url} → HTTP {s}{' (로그인 화면)' if login else ''}")
     if s != 200 or login:
         return [], html
+    meta = [b for b in baselines_from_meta(html) if all(k.lower() in b["name"].lower() for k in keywords)]
+    if meta:
+        tried.append(f"   화면 숨은 정보(metaData)에서 '{' '.join(keywords)}' Baseline {len(meta)}건")
+        return meta, html
     out, seen = [], set()
     for rows in html_tables(html):
         for row in rows:
@@ -750,9 +816,9 @@ def baseline_desc(cl, fetch_text, cb_base, b, header_kw, tried, debug):
     """선택한 Baseline의 Description 표 → [(이름, 버전)], 출처 설명"""
     if b.get("desc"):
         rows = parse_baseline_desc(b["desc"], header_kw)
-        tried.append(f"Description(목록 응답) → {len(rows)}행")
+        tried.append(f"Description({b.get('source', '목록')}) → {len(rows)}행")
         if rows:
-            return rows, "목록 API의 description"
+            return rows, f"{b.get('source', '목록')}의 description"
     bid = b.get("id")
     if bid:
         for path in (f"/api/v3/baselines/{bid}", f"/rest/baseline/{bid}", f"/rest/document/{bid}"):
@@ -805,32 +871,108 @@ def repo_kind(ci, cfg):
 _TREES = {}
 
 
-def project_trackers(cl, pid):
-    """프로젝트의 Tracker 이름 목록 [(id, 이름)] — 이름이 다른 위치에서 관리되는지 찾을 때 사용"""
+def _tid(n):
+    if not isinstance(n, dict) or n.get("isFolder"):
+        return None
+    t = n.get("trackerId") or (n.get("tracker") or {}).get("id")
+    return str(t) if t is not None else None
+
+
+def _tname(n):
+    return str(n.get("text") or n.get("name") or (n.get("tracker") or {}).get("name") or "")
+
+
+def _kids(n):
+    return (n.get("children") or n.get("nodes") or []) if isinstance(n, dict) else []
+
+
+def tracker_tree(cl, pid):
+    """프로젝트 Tracker 트리 (실패 시 None). 한 번 받으면 이번 실행 동안 재사용"""
     if pid not in _TREES:
         try:
             r = cl.get(f"/api/v3/trackers/tree?projectId={pid}")
-            nodes = r if isinstance(r, list) else (r.get("children") or r.get("nodes") or r.get("items") or [r])
+            _TREES[pid] = r if isinstance(r, list) else (r.get("children") or r.get("nodes") or r.get("items") or [r])
+            try:  # 실제 트리 구조 확인용 (프로젝트 구조만, 개인정보 없음)
+                (STATE / "debug").mkdir(parents=True, exist_ok=True)
+                (STATE / "debug" / f"tracker_tree_{pid}.json").write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
+            except Exception:  # noqa
+                pass
         except ApiError:
-            nodes = None
-        out = []
-
-        def walk(ns):
-            for n in ns or []:
-                if not isinstance(n, dict):
-                    continue
-                tid = n.get("trackerId") or (n.get("tracker") or {}).get("id")
-                if tid is not None and not n.get("isFolder"):
-                    out.append((str(tid), str(n.get("text") or n.get("name") or (n.get("tracker") or {}).get("name") or "")))
-                walk(n.get("children") or n.get("nodes"))
-        walk(nodes)
-        _TREES[pid] = out if nodes is not None else None
+            _TREES[pid] = None
     return _TREES[pid]
 
 
-def check_repo(ci, kind, ccb, ccf, cbs, cfg, similar):
-    """반환 {"result": OK|OK(유사)|NOK|확인불가|수동 확인, "found": 저장소에서 찾은 이름, "reason": 근거}"""
-    r = {"result": "", "found": "", "reason": ""}
+def project_trackers(cl, pid):
+    """프로젝트의 Tracker 이름 목록 [(id, 이름)] — 이름이 다른 위치에서 관리되는지 찾을 때 사용"""
+    nodes = tracker_tree(cl, pid)
+    if nodes is None:
+        return None
+    out = []
+
+    def walk(ns):
+        for n in ns or []:
+            if _tid(n):
+                out.append((_tid(n), _tname(n) or tracker_name(cl, _tid(n))))
+            walk(_kids(n))
+    walk(nodes)
+    return out
+
+
+def tracker_ancestors(cl, pid, tid):
+    """등록 Tracker 위의 노드들 [(id, 이름)] — 가까운 상위부터 트리 최상단까지.
+    실측(2026-11-24): API 트리에서는 화면상 상위 Tracker(예: 'System Qualification Test Specfication_ADCU50')가
+    Tracker가 아닌 폴더처럼 표시될 수 있음 → 노드 종류와 무관하게 모든 상위 노드의 이름을 비교 대상으로 쓴다.
+    트리를 못 읽으면 None, 트리에서 못 찾으면 []"""
+    nodes = tracker_tree(cl, pid)
+    if nodes is None:
+        return None
+
+    def find(ns, path):
+        for n in ns or []:
+            if not isinstance(n, dict):
+                continue
+            p2 = path + [n]
+            if _tid(n) == str(tid) or (str(n.get("id", "")) == str(tid) and not n.get("isFolder")):
+                return p2
+            got = find(_kids(n), p2)
+            if got:
+                return got
+        return None
+    path = find(nodes, []) or []
+    out = []
+    for n in reversed(path[:-1]):
+        t, name = _tid(n), _tname(n)
+        if t and not name:  # 실측: 트리의 Tracker 노드에는 이름 없이 trackerId만 있음 → Tracker 정보로 이름 조회
+            name = tracker_name(cl, t)
+        if name:
+            out.append((t or "폴더", name))
+    return out
+
+
+_TNAMES = {}
+
+
+def tracker_name(cl, tid):
+    if tid not in _TNAMES:
+        ok, v = cl.get_many([f"/api/v3/trackers/{tid}"])[0]
+        _TNAMES[tid] = (v.get("name") or "") if ok and isinstance(v, dict) else ""
+    return _TNAMES[tid]
+
+
+COND = "Conditional OK"
+
+
+def grade(ratio, th):
+    """유사도 → 판정 (사용자 결정 2026-11-24): ≥ th[0](90%) OK / ≥ th[1](80%) Conditional OK / 그 미만 NOK"""
+    if ratio is None:
+        return None
+    return "OK" if ratio >= th[0] else (COND if ratio >= th[1] else "NOK")
+
+
+def check_repo(ci, kind, ccb, ccf, cbs, cfg, th):
+    """반환 {"result": OK|Conditional OK|NOK|확인 필요|확인불가|수동 확인, "found": 저장소에서 찾은 이름,
+            "reason": 근거, "ratio": 이름 유사도(0~1, 비교하지 않았으면 None)}"""
+    r = {"result": "", "found": "", "reason": "", "ratio": None}
     if kind == "none":
         return dict(r, result="NOK", reason="CI list에 Path in Repository가 비어 있음")
     if kind == "other":
@@ -844,22 +986,37 @@ def check_repo(ci, kind, ccb, ccf, cbs, cfg, similar):
             return dict(r, result="확인불가", reason=f"Tracker {tid} 조회 실패 ({v})")
         tname = v.get("name", "")
         r["found"] = f"{tname} ({tid})"
-        m = name_match(ci["ciName"], [tname], similar)
-        if m["level"] == "exact":
-            return dict(r, result="OK", reason="경로의 Tracker 이름 = CI name")
-        if m["level"] == "similar":
-            return dict(r, result="OK(유사)", reason=f"Tracker 이름이 CI name과 일부 다름 (유사도 {m['ratio']:.0%}) — 같은 산출물인지 확인")
+        m = name_match(ci["ciName"], [tname], th[1])
+        best = {"ratio": m["ratio"], "id": tid, "name": tname, "up": False}
+        pid = v.get("projectId") or (v.get("project") or {}).get("id")
+        ups = None
+        if m["ratio"] < th[0] and pid:
+            # 등록 Tracker가 하위 Tracker인 경우 → 상위 Tracker 이름으로 비교 (CL6와 같은 상위 기준, 사용자 결정 2026-11-24)
+            ups = tracker_ancestors(ccb, pid, tid)
+            for uid, uname in ups or []:
+                mu = name_match(ci["ciName"], [uname], th[1])
+                if mu["ratio"] > best["ratio"]:
+                    best = {"ratio": mu["ratio"], "id": uid, "name": uname, "up": True}
+        g = grade(best["ratio"], th)
+        r["ratio"] = best["ratio"]
+        if best["up"]:
+            r["found"] = f"{best['name']} ({best['id']}) ← 등록: {tname} ({tid})"
+        where = f"등록 Tracker는 하위 Tracker → 상위 '{best['name']}'({best['id']})" if best["up"] else "경로의 Tracker"
+        if g == "OK":
+            return dict(r, result="OK", reason=f"{where} 이름 = CI name" + ("" if best["ratio"] == 1 else f" (유사도 {best['ratio']:.0%})"))
+        if g == COND:
+            return dict(r, result=COND, reason=f"{where} 이름이 CI name과 일부 다름 (유사도 {best['ratio']:.0%}) — 같은 산출물인지 확인")
         if v.get("deleted") or v.get("hidden"):
             return dict(r, result="NOK", reason="경로의 Tracker가 삭제/숨김 상태")
-        pid = v.get("projectId") or (v.get("project") or {}).get("id")
         others = project_trackers(ccb, pid) if pid else None
         if others:
-            mm = name_match(ci["ciName"], [n for _, n in others], similar)
-            if mm["level"] != "none":
+            mm = name_match(ci["ciName"], [n for _, n in others], th[1])
+            if mm["ratio"] >= th[0]:  # 힌트는 90% 이상만 (80%대는 SIT·SQT처럼 다른 산출물이 걸림)
                 oid, oname = others[mm["index"]]
                 return dict(r, result="NOK", reason=f"경로의 Tracker 이름('{tname}')이 CI name과 다름. "
-                                                    f"같은 이름의 Tracker가 다른 위치에 있음: '{oname}' ({oid}) — CI list 경로 오기 가능성")
-        return dict(r, result="NOK", reason=f"경로의 Tracker 이름('{tname}')이 CI name과 다름 (유사도 {m['ratio']:.0%})")
+                                                    f"비슷한 이름의 Tracker가 다른 위치에 있음: '{oname}' ({oid}, 유사도 {mm['ratio']:.0%}) — CI list 경로 오기 가능성")
+        upn = f" / 상위: {' > '.join(repr(n) for _, n in reversed(ups))}" if ups else (" / 트리에서 상위를 찾지 못함" if ups == [] else "")
+        return dict(r, result="NOK", reason=f"경로의 Tracker 이름('{tname}')이 CI name과 다름 (유사도 {best['ratio']:.0%}){upn}")
     if kind == "confluence":
         path = ci["path"]
         pid = (re.search(r"pageId=(\d+)", path) or re.search(r"/pages/(\d+)", path) or re.search(r"/attachments/(\d+)/", path))
@@ -889,17 +1046,21 @@ def check_repo(ci, kind, ccb, ccf, cbs, cfg, similar):
                 return dict(r, result="NOK", reason=f"Confluence 경로의 페이지가 없음 ({e})")
             return dict(r, result="확인불가", reason=f"Confluence 조회 실패 ({e})")
         r["found"] = title
-        m = name_match(ci["ciName"], [title], similar)
-        if m["level"] == "exact" or name_key(ci["ciName"]) in name_key(title):
-            return dict(r, result="OK", reason="Confluence 경로의 제목에 CI name 있음")
-        if m["level"] == "similar":
-            return dict(r, result="OK(유사)", reason=f"Confluence 제목이 CI name과 일부 다름 (유사도 {m['ratio']:.0%}) — 확인")
-        return dict(r, result="NOK", reason=f"Confluence 경로의 제목('{title}')이 CI name과 다름")
+        m = name_match(ci["ciName"], [title], th[1])
+        if name_key(ci["ciName"]) and name_key(ci["ciName"]) in name_key(title):
+            return dict(r, result="OK", ratio=1.0, reason="Confluence 경로의 제목에 CI name 있음")
+        g = grade(m["ratio"], th)
+        r["ratio"] = m["ratio"]
+        if g == "OK":
+            return dict(r, result="OK", reason=f"Confluence 경로의 제목 = CI name (유사도 {m['ratio']:.0%})")
+        if g == COND:
+            return dict(r, result=COND, reason=f"Confluence 제목이 CI name과 일부 다름 (유사도 {m['ratio']:.0%}) — 확인")
+        return dict(r, result="NOK", reason=f"Confluence 경로의 제목('{title}')이 CI name과 다름 (유사도 {m['ratio']:.0%})")
     # cb_page: Codebeamer의 Tracker가 아닌 화면 (문서·위키 등)
     s, html, final = cbs.fetch_text(ci["path"])
     if s == 404:
         return dict(r, result="NOK", reason="Codebeamer 경로가 없음 (HTTP 404)")
-    if s != 200 or re.search(r"type=[\"']?password", html or "", re.I):
+    if s != 200 or is_login_html(html, final):
         return dict(r, result="확인불가", reason=f"Codebeamer 경로 조회 실패 (HTTP {s})")
     t = re.search(r"<title[^>]*>(.*?)</title>", html or "", re.I | re.S)
     title = re.sub(r"\s+", " ", t.group(1)).strip() if t else ""
@@ -912,17 +1073,45 @@ def check_repo(ci, kind, ccb, ccf, cbs, cfg, similar):
 # =====================================================================
 # CL1-5. ② Baseline 포함 확인
 # =====================================================================
-def check_baseline(ci, rows, similar):
+def taken_rows(cis, rows):
+    """다른 CI가 이름이 정확히 같아(100%) 이미 차지한 Baseline 항목 번호 {번호: CI ID}.
+    실측: Baseline 항목끼리도 서로 다른 산출물인데 80~90% 비슷한 쌍이 많음
+    (예: System/Software Integration Test Specification 90%) → 빠진 산출물이 이웃 항목에 유사 일치로 걸리지 않게 한다."""
+    keys = {name_key(n): i for i, (n, _) in enumerate(rows or [])}
+    out = {}
+    for c in cis:
+        i = keys.get(name_key(c["ciName"]))
+        if i is not None:
+            out.setdefault(i, c["ciId"])
+    return out
+
+
+def check_baseline(ci, rows, th, taken=None):
     if rows is None:
-        return {"result": "확인불가", "item": "", "version": "", "reason": "Baseline 내용을 읽지 못함 (확인불가 탭 참고)", "index": None}
-    m = name_match(ci["ciName"], [n for n, _ in rows], similar)
-    if m["level"] == "exact":
-        return {"result": "OK", "item": m["name"], "version": rows[m["index"]][1], "reason": "Baseline 대상 산출물에 있음", "index": m["index"]}
-    if m["level"] == "similar":
-        return {"result": "OK(유사)", "item": m["name"], "version": rows[m["index"]][1],
-                "reason": f"Baseline 항목 이름이 CI name과 일부 다름 (유사도 {m['ratio']:.0%}) — 같은 산출물인지 확인", "index": m["index"]}
+        return {"result": "확인불가", "item": "", "version": "", "reason": "Baseline 내용을 읽지 못함 (확인불가 탭 참고)",
+                "index": None, "ratio": None}
+    exact = [i for i, (n, _) in enumerate(rows) if name_key(n) and name_key(n) == name_key(ci["ciName"])]
+    if exact:
+        i = exact[0]
+        return {"result": "OK", "item": rows[i][0], "version": rows[i][1], "index": i, "ratio": 1.0, "reason": "Baseline 대상 산출물에 있음"}
+    taken = taken or {}
+    free = [i for i in range(len(rows)) if i not in taken]  # 다른 CI가 정확히 차지한 항목은 유사 일치 후보에서 제외
+    m = name_match(ci["ciName"], [rows[i][0] for i in free], th[1])
+    if m["index"] is not None:
+        m["index"] = free[m["index"]]
+    g = grade(m["ratio"], th)
+    if g == "OK":
+        return {"result": "OK", "item": m["name"], "version": rows[m["index"]][1], "index": m["index"], "ratio": m["ratio"],
+                "reason": "Baseline 대상 산출물에 있음" + ("" if m["ratio"] == 1 else f" (유사도 {m['ratio']:.0%})")}
+    if g == COND:
+        return {"result": COND, "item": m["name"], "version": rows[m["index"]][1], "index": m["index"], "ratio": m["ratio"],
+                "reason": f"Baseline 항목 이름이 CI name과 일부 다름 (유사도 {m['ratio']:.0%}) — 같은 산출물인지 확인"}
     hint = f" — 가장 비슷한 항목: '{m['name']}' ({m['ratio']:.0%})" if m["name"] and m["ratio"] >= 0.6 else ""
-    return {"result": "NOK", "item": "", "version": "", "reason": "Baseline 대상 산출물에 없음" + hint, "index": None}
+    near = name_match(ci["ciName"], [rows[i][0] for i in taken], th[1]) if taken else None
+    if near and near["ratio"] >= th[1]:
+        ti = list(taken)[near["index"]]
+        hint += f" (비슷한 '{rows[ti][0]}'({near['ratio']:.0%})는 {taken[ti]}의 항목이라 제외)"
+    return {"result": "NOK", "item": "", "version": "", "reason": "Baseline 대상 산출물에 없음" + hint, "index": None, "ratio": m["ratio"]}
 
 
 # =====================================================================
@@ -935,7 +1124,7 @@ def build_workbook(results, base_info, meta):
 
     HF, HFont = PatternFill("solid", fgColor="00B0F0"), Font(bold=True, color="FFFFFF")
     LINK = Font(color="0563C1", underline="single")
-    FILL = {"NOK": PatternFill("solid", fgColor="FFC7CE"), "OK(유사)": PatternFill("solid", fgColor="FFF2CC"),
+    FILL = {"NOK": PatternFill("solid", fgColor="FFC7CE"), COND: PatternFill("solid", fgColor="FFF2CC"),
             "확인 필요": PatternFill("solid", fgColor="FFF2CC"), "확인불가": PatternFill("solid", fgColor="E7E6E6"),
             "수동 확인": PatternFill("solid", fgColor="DDEBF7")}
 
@@ -963,12 +1152,12 @@ def build_workbook(results, base_info, meta):
     wb.remove(wb.active)
 
     # 요약
-    sm = sheet(wb, "요약", ["구분", "OK", "OK(유사)", "NOK", "확인 필요", "확인불가", "수동 확인", "계"], [26, 8, 10, 8, 10, 10, 10, 8])
+    sm = sheet(wb, "요약", ["구분", "OK", COND, "NOK", "확인 필요", "확인불가", "수동 확인", "계"], [26, 8, 14, 8, 10, 10, 10, 8])
     for label, key in (("① 저장소 관리", "repo"), ("② Baseline 포함", "base")):
         cnt = {}
         for r in results:
             cnt[r[key]["result"]] = cnt.get(r[key]["result"], 0) + 1
-        sm.append([label] + [cnt.get(k, 0) for k in ("OK", "OK(유사)", "NOK", "확인 필요", "확인불가", "수동 확인")] + [len(results)])
+        sm.append([label] + [cnt.get(k, 0) for k in ("OK", COND, "NOK", "확인 필요", "확인불가", "수동 확인")] + [len(results)])
     sm.append([])
     sm.append(["NOK CI 수 (① 또는 ②)", sum(1 for r in results if "NOK" in (r["repo"]["result"], r["base"]["result"]))])
     sm.append(["사용한 Baseline", base_info.get("name") or "(확인불가)"])
@@ -977,18 +1166,21 @@ def build_workbook(results, base_info, meta):
 
     # Overview
     ov = sheet(wb, "Overview", ["CI ID", "Category", "CI name", "Author", "Repository", "Path in Repository",
-                                "① 저장소 관리", "① 저장소에서 찾은 이름", "① 근거",
-                                "② Baseline 포함", "② Baseline 항목", "② 버전(참고)", "② 근거", "NOK 사유"],
-               [22, 10, 40, 12, 14, 45, 12, 36, 50, 12, 40, 10, 50, 60])
+                                "① 저장소 관리", "① 유사도", "① 저장소에서 찾은 이름", "① 근거",
+                                "② Baseline 포함", "② 유사도", "② Baseline 항목", "② 버전(참고)", "② 근거", "NOK 사유"],
+               [22, 10, 40, 12, 14, 45, 14, 9, 36, 50, 14, 9, 40, 10, 50, 60])
     for r in results:
         nok = [f"① {r['repo']['reason']}" if r["repo"]["result"] == "NOK" else "",
                f"② {r['base']['reason']}" if r["base"]["result"] == "NOK" else ""]
         ov.append([r["ciId"], r["category"], r["ciName"], r["author"], r["repository"], None,
-                   r["repo"]["result"], r["repo"]["found"], r["repo"]["reason"],
-                   r["base"]["result"], r["base"]["item"], r["base"]["version"], r["base"]["reason"],
+                   r["repo"]["result"], r["repo"].get("ratio"), r["repo"]["found"], r["repo"]["reason"],
+                   r["base"]["result"], r["base"].get("ratio"), r["base"]["item"], r["base"]["version"], r["base"]["reason"],
                    " / ".join(x for x in nok if x) or None])
         link(ov.cell(ov.max_row, 6), r["path"])
-        paint(ov.cell(ov.max_row, 7)); paint(ov.cell(ov.max_row, 10))
+        paint(ov.cell(ov.max_row, 7)); paint(ov.cell(ov.max_row, 11))
+        for c in (8, 12):
+            ov.cell(ov.max_row, c).number_format = "0%"
+            ov.cell(ov.max_row, c).alignment = Alignment(horizontal="center")
     ov.auto_filter.ref = ov.dimensions
 
     # NOK 목록
@@ -1001,7 +1193,7 @@ def build_workbook(results, base_info, meta):
                 link(nk.cell(nk.max_row, 5), r["path"])
     nk.auto_filter.ref = nk.dimensions
 
-    # 확인 필요 (OK(유사) · 확인 필요 · 확인불가 · 수동 확인)
+    # 확인 필요 (Conditional OK · 확인 필요 · 확인불가 · 수동 확인)
     ck = sheet(wb, "확인 필요", ["CI ID", "Category", "CI name", "Path in Repository", "항목", "결과", "내용", "확인 결과(사람 기입)"],
                [22, 10, 40, 45, 16, 12, 80, 20])
     for r in results:
@@ -1023,7 +1215,7 @@ def build_workbook(results, base_info, meta):
         bl.append([i + 1, n, v, ", ".join(hit.get(i, [])) or None,
                    None if i in hit else "검사 대상 CI 중 이 이름의 CI 없음 (CI list에 없거나 PBL 미지정·이름 다름)"])
         if i not in hit:
-            bl.cell(bl.max_row, 5).fill = FILL["OK(유사)"]
+            bl.cell(bl.max_row, 5).fill = FILL[COND]
     if not rows:
         bl.append([None, "(Baseline 내용을 읽지 못함)"])
 
@@ -1102,7 +1294,7 @@ def main(argv=None):
     if not cfg_path.exists():
         raise ValueError(f"설정 파일이 없습니다: {cfg_path.name} — config.example.json을 복사해 config.json을 만들고 실제 값을 넣어 주세요.")
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    similar = float(cfg["cl1"].get("similar_ratio", 0.9))
+    th = (float(cfg["cl1"].get("ok_ratio", 0.9)), float(cfg["cl1"].get("conditional_ratio", 0.8)))
     for d in (STATE, STATE / "ci_list", STATE / "debug"):
         d.mkdir(exist_ok=True)
     out_dir = HERE / cfg.get("output_dir", "output")
@@ -1141,6 +1333,7 @@ def main(argv=None):
             cis, info = read_ci_list(data, cfg, saved_path=saved)
             log(f"2. 시트 '{info['sheet']}' 전체 {info['total']}행 → PBL 없음 제외 {info['no_pbl']} → 검사 대상 {info['targets']}개 "
                 f"(PBL 기준: {info['pbl_column']}, 저장소 종류 무관)")
+            all_targets = list(cis)  # Baseline 항목 차지 판단은 일부 실행이어도 전체 대상 CI 기준
             if a.ci:
                 want = {x.strip() for x in a.ci}
                 cis = [c for c in cis if c["ciId"] in want]
@@ -1171,10 +1364,12 @@ def main(argv=None):
             if base["rows"]:
                 log(f"4. Baseline '{base['name']}' — 대상 산출물 {len(base['rows'])}개 ({base['from']})")
             else:
+                for i, (u, st, html) in enumerate(debug):
+                    (STATE / "debug" / f"baseline_{i + 1}.html").write_text(html or "", encoding="utf-8")
                 log("4. ⚠ Baseline 내용을 읽지 못했습니다 — ② Baseline 포함은 전부 확인불가로 남깁니다")
                 for t in tried:
                     log(f"     · {t}")
-                log("     → config.json의 cl1.baseline 조건 확인, 또는 --baseline-file 로 Description을 직접 지정")
+                log("     → state\\debug 폴더에 받은 화면을 저장했습니다 (Claude에게 전달). 급하면 --baseline-file 로 Description 직접 지정")
 
             if a.doctor:
                 for t in tried:
@@ -1189,24 +1384,25 @@ def main(argv=None):
                     log(f"   화면 저장: {f.name} ← {u} (HTTP {s})")
                 for c in cis[:3]:
                     k = repo_kind(c, cfg)
-                    rr = check_repo(c, k, ccb, ccf, cbs, cfg, similar)
+                    rr = check_repo(c, k, ccb, ccf, cbs, cfg, th)
                     log(f"   ① {c['ciId']} [{k}] {rr['result']} — {rr['reason']}")
                 log("✔ 점검 완료 — Baseline 후보·산출물 목록이 화면과 같으면 run_cl1.bat 으로 실행하세요.")
                 log("   (다르면 위 '조회:' 줄과 state\\debug 폴더 파일을 Claude에게 전달)")
                 return 0
 
             results = []
+            taken = taken_rows(all_targets, base["rows"])
             for n, c in enumerate(cis, 1):
                 k = repo_kind(c, cfg)
                 try:
-                    rr = check_repo(c, k, ccb, ccf, cbs, cfg, similar)
+                    rr = check_repo(c, k, ccb, ccf, cbs, cfg, th)
                 except NeedLogin:
                     raise
                 except Exception as e:  # noqa
                     rr = {"result": "확인불가", "found": "", "reason": f"조회 중 오류: {e}"}
-                br = check_baseline(c, base["rows"], similar)
+                br = check_baseline(c, base["rows"], th, taken)
                 results.append(dict(c, repo=rr, base=br, kind=k))
-                log(f"5. ({n}/{len(cis)}) {c['ciId']:<24} ① {rr['result']:<6} ② {br['result']:<6} {c['ciName'][:40]}")
+                log(f"5. ({n}/{len(cis)}) {c['ciId']:<24} ① {rr['result']:<14} ② {br['result']:<14} {c['ciName'][:40]}")
         finally:
             ctx.close()
 
@@ -1223,7 +1419,8 @@ def main(argv=None):
         "① 판정 규칙": "CI list 경로(Path in Repository)에서 CI name과 같은 산출물이 관리되는지. Codebeamer Tracker = Tracker 이름 비교, "
                     "Confluence = 페이지 제목·첨부 비교, 그 외 저장소 = 수동 확인. 경로 없음·Tracker/페이지 없음·이름 다름 = NOK",
         "② 판정 규칙": "CI name이 Baseline Description의 대상 산출물 목록에 있는지 (버전은 비교하지 않음). 없으면 NOK",
-        "이름 비교": f"대소문자·공백·기호 차이는 같은 이름 / 철자 유사도 {similar:.0%} 이상은 OK(유사) — 같은 산출물인지 사람이 확인",
+        "이름 비교": f"대소문자·공백·기호 차이는 같은 이름(100%) / 철자 유사도 {th[0]:.0%} 이상 OK · {th[1]:.0%}~{th[0]:.0%} 미만 {COND}(사람 확인) · "
+                   f"{th[1]:.0%} 미만 NOK. 유사도는 Overview '① 유사도'·'② 유사도' 열",
         "원칙": "조회 실패 = 확인불가 (OK/NOK로 넘기지 않음) · 읽기 전용 · 결과는 새 파일",
         "소요 시간": f"{time.time() - t0:.0f}초",
         "주의": "자동 생성 초안입니다. 공식 산출물 반영·저장은 담당자가 검토 후 직접 합니다.",

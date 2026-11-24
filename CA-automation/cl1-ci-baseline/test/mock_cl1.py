@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from openpyxl import Workbook
 
-STATE = {"conf": False, "cb": False, "legacy_api": False}
+STATE = {"conf": False, "cb": False, "legacy_api": False, "meta": True, "ui_need": None, "ui_issue": "1", "ui_logins": 0}
 CRED = ("jae", "pw!23")
 CB = "http://127.0.0.1:8202/cb"
 LOGIN_FORM = """<html><body><form method="post" action="{act}">
@@ -29,6 +29,10 @@ def make_ci_list():
         ("MAN.3", "CI-MAN3-01", "Project Plan", "Codebeamer", f"{CB}/tracker/1007", None),
         ("SUP.8", "CI-SUP8-01", "CM Plan", "Codebeamer", f"{CB}/tracker/1500", "PBL"),
         ("SYS.2", "CI-SYS2-02", "Concept Requirement Specification", "Codebeamer", "", "PBL"),
+        ("SYS.5", "CI-SYS5-05", "System Qualification Test Specfication_ADCU50", "Codebeamer", f"{CB}/tracker/1102", "PBL"),  # 하위
+        ("SYS.5", "CI-SYS5-06", "System Qualification Test Specfication_ADCU50", "Codebeamer", f"{CB}/tracker/1103", "PBL"),  # 손자
+        ("SYS.4", "CI-SYS4-03", "System Integration test Specification_ADCU50", "Codebeamer", f"{CB}/tracker/1202", "PBL"),  # 상위도 다름
+        ("HWE.4", "CI-HWE4-03", "Hardware Integration Test Specification_ADCU-50S", "Codebeamer", f"{CB}/tracker/1300", "PBL"),  # 88%
     ]
     for i, (cat, cid, name, repo, path, pbl) in enumerate(rows):
         n = 4 + i
@@ -42,12 +46,21 @@ CI_XLSX = make_ci_list()
 TRACKERS = {1001: "Stakeholder Requirements(FuSa)", 1002: "System Requirements Specification ADCU50",
             1003: "Hardware Requirements Specification_ADCU50S", 1004: "SW Test Plan",
             1005: "Software Requirements Specification", 1006: "Software Qualification Test Report", 1007: "Project Plan"}
-TREE = [{"isFolder": True, "text": "SWE", "children": [{"trackerId": t, "text": n} for t, n in TRACKERS.items()]}]
+TRACKERS.update({1101: "System Qualification Test Specfication_ADCU50", 1102: "HDA4-STC-D002-Function", 1103: "HDA4-STC-D002-Sub",
+                 1201: "Integration Test Plan", 1202: "Test Cases (All) (SyITS)_ADCU50",
+                 1300: "Hardware Integration Test Specification and Report_ADUC-50S"})
+TREE = [{"isFolder": True, "text": "SWE", "children": [{"trackerId": t} for t in TRACKERS if t < 1100]},  # 실측: Tracker 노드는 번호만
+        {"isFolder": True, "text": "SYS.5", "children": [{"trackerId": 1101, "children": [
+            {"trackerId": 1102, "children": [{"trackerId": 1103}]}]}]},
+        {"isFolder": True, "text": "SYS.4", "children": [{"trackerId": 1201, "children": [{"trackerId": 1202}]}]},
+        {"isFolder": True, "text": "HWE.4", "children": [{"trackerId": 1300}]}]
 
 DESC_ROWS = [("Stakeholder Requirements(FuSa)", "v3.0"), ("Item Definition", "v5.0"),
              ("System Requirements Specification_ADCU50", "v2.5"), ("System Architectural Design Specifiction_ADCU50", "v2.1"),
              ("Hardware Requirements Specification_ADCU50S", "v3.0"), ("Software Requirements Specification", "v2.3"),
-             ("Source code", "-"), ("Concept Requirement Specification", "v2.9")]
+             ("Source code", "-"), ("Concept Requirement Specification", "v2.9"),
+             ("System Qualification Test Specfication_ADCU50", "v7.0"), ("System Integration test Specification_ADCU50", "v1.0"),
+             ("Hardware Integration Test Specification_ADCU-50S", "v3.0")]
 DESC_HTML = ("<table class='propertyTable'><tr><td>Name:</td><td><a href='/cb/doc/9705300'>HKMC_ADCU50S_RS4FL_G_M_PBL_2026-11-19</a></td>"
              "<td>Description:</td><td><div class='wiki'><table><tr><th>PBL Baseline 대상 산출물</th><th>산출물 버전</th></tr>"
              + "".join(f"<tr><td>{n.replace('_', '<br>_', 1) if 'ADCU' in n else n}</td><td>{v}</td></tr>" for n, v in DESC_ROWS)
@@ -62,9 +75,21 @@ BASELINES = [  # (이름, 문서 번호) — 화면 순서 = 최신이 위
 ]
 
 
+def _meta(n, d):
+    """실제 Codebeamer 화면처럼 행마다 숨은 정보(span.metaData)를 넣는다 (Description은 HTML 이스케이프)"""
+    import html as H
+    if not STATE["meta"]:
+        return ""
+    desc = DESC_HTML if d == 9705300 else "<div>old</div>"
+    ts = {9800000: 1795100000000, 9900000: 1795200000000, 9705300: 1794989240321, 9600000: 1792128926448}[d]
+    return (f'<span class="metaData" style="display: none;" data-baseline-id="{d}" data-baseline-created-timestamp="{ts}" '
+            f'data-baseline-name="{n}" data-baseline-url="/cb/wiki/revision/1?revision={d}" '
+            f'data-baseline-description="{H.escape(desc, quote=True)}"></span>')
+
+
 def baselines_html():
     rows = "".join(
-        f"<tr><td><a href='/cb/doc/{d}'>{n}</a><div class='desc'>Hover over here to see the description.</div></td>"
+        f"<tr><td>{_meta(n, d)}<a href='/cb/doc/{d}'>{n}</a><div class='desc'>Hover over here to see the description.</div></td>"
         f"<td><a href='/cb/userdata/1'>kitae_lee</a> Nov 18 17:07</td>"
         f"<td><a href='/cb/proj/doc/details.do?doc_id={d}&amp;orgDitchnetTabPaneId=document-properties'>props</a></td></tr>"
         for n, d in BASELINES)
@@ -117,8 +142,18 @@ class Conf(H):
 class Cb(H):
     def do_POST(self):
         if (lambda f: (f.get("user"), f.get("password")))(_form(self)) == CRED:
-            STATE["cb"] = True
-        self.send_response(302); self.send_header("Location", "/cb/"); self.end_headers()
+            STATE["cb"] = True; STATE["ui_logins"] += 1
+            self.send_response(302); self.send_header("Set-Cookie", f"ui={STATE['ui_issue']}; Path=/")
+        else:
+            self.send_response(302)
+        self.send_header("Location", "/cb/"); self.end_headers()
+
+    def ui_expired(self):
+        """실측 재현: API는 로그인 상태인데 화면 요청만 로그인 화면(HTTP 200)을 돌려줌"""
+        if not STATE["ui_need"]:
+            return False
+        ck = dict(x.strip().split("=", 1) for x in (self.headers.get("Cookie") or "").split(";") if "=" in x)
+        return ck.get("ui") != STATE["ui_need"]
 
     def do_GET(self):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
@@ -141,6 +176,8 @@ class Cb(H):
         if p == "/cb/rest/project/171/baselines" and STATE["legacy_api"]:
             return self.send(200, [{"uri": f"/baseline/{d}", "name": n, "createdAt": f"2026-11-{19 if d == 9705300 else 1:02d}T08:00:00Z",
                                     "description": DESC_WIKI if d == 9705300 else "old"} for n, d in BASELINES if "SWQT" not in n])
+        if p == "/cb/project/171/baselines" and self.ui_expired():
+            return self.send(200, LOGIN_FORM.format(act="/cb/login.spr", u="user", p="password"), "text/html")
         if p == "/cb/project/171/baselines":
             return self.send(200, baselines_html(), "text/html")
         if p == "/cb/proj/doc/details.do" and q.get("doc_id") == ["9705300"]:

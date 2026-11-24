@@ -37,21 +37,25 @@ def overview(path):
 EXPECT = {  # CI ID: (① 저장소, ② Baseline)
     "CI-SYS1-01": ("OK", "OK"),
     "CI-SYS2-01": ("OK", "OK"),            # 공백/밑줄 차이 = 같은 이름
-    "CI-HWE1-01": ("OK(유사)", "OK(유사)"),  # ADCU50 vs ADCU50S → 사람 확인
-    "CI-SYS3-01": ("NOK", "OK(유사)"),      # Tracker 404 / Baseline 쪽 오타(Specifiction)
+    "CI-HWE1-01": ("OK", "OK"),            # ADCU50 vs ADCU50S (유사도 98% ≥ 90%)
+    "CI-SYS3-01": ("NOK", "OK"),            # Tracker 404 / Baseline 쪽 오타(Specifiction, 98%)
     "CI-SWE1-01": ("NOK", "OK"),            # 경로 Tracker 이름 다름, 다른 위치에 같은 이름 Tracker
     "CI-SWE6-01": ("OK", "NOK"),            # Baseline에 없음
     "CI-SYS1-02": ("OK", "OK"),             # Confluence 페이지 (Category 빈칸 → 위 행 값)
     "CI-SWE3-01": ("수동 확인", "OK"),       # Git
     "CI-SUP8-01": ("확인불가", "NOK"),       # Tracker 조회 500
     "CI-SYS2-02": ("NOK", "OK"),            # 경로 비어 있음
+    "CI-SYS5-05": ("OK", "OK"),             # 하위 Tracker → 상위 이름 = CI name
+    "CI-SYS5-06": ("OK", "OK"),             # 손자 Tracker → 최상위 이름 = CI name
+    "CI-SYS4-03": ("NOK", "OK"),            # 하위 Tracker, 상위 이름도 다름
+    "CI-HWE4-03": ("Conditional OK", "OK"), # 'and Report'·ADUC 오타 → 88%
 }
 
 print("=== doctor ===")
 assert C.main(["--config", str(tc), "--doctor"]) == 0
 assert list((root / "state" / "debug").glob("baseline_*.html")), "doctor가 화면을 저장해야 함"
 
-print("=== run 1: 화면(HTML)에서 Baseline 읽기 ===")
+print("=== run 1: 화면 숨은 정보(metaData)에서 Baseline 읽기 ===")
 assert C.main(["--config", str(tc)]) == 0
 ov, wb = overview(latest_out())
 assert "CI-MAN3-01" not in ov, "PBL 없는 CI는 제외"
@@ -64,10 +68,31 @@ assert ov["CI-SYS1-02"]["Category"] == "SWE.6"  # 병합 셀 → 위 행 값
 summ = [r for r in wb["요약"].iter_rows(values_only=True)]
 assert any(r[0] == "사용한 Baseline" and r[1] == "HKMC_ADCU50S_RS4FL_G_M_PBL_2026-11-19" for r in summ), summ
 bl = list(wb["Baseline"].iter_rows(values_only=True))[1:]
-assert len(bl) == 8 and bl[2][1] == "System Requirements Specification_ADCU50", bl
+assert len(bl) == 11 and bl[2][1] == "System Requirements Specification_ADCU50", bl
 nok = list(wb["NOK"].iter_rows(values_only=True))[1:]
-assert len(nok) == 5, nok
+assert len(nok) == 6, nok
+assert "상위 '" in ov["CI-SYS5-05"]["① 근거"] and "1101" in ov["CI-SYS5-06"]["① 근거"], ov["CI-SYS5-06"]
+assert "'SYS.4' > 'Integration Test Plan'" in ov["CI-SYS4-03"]["① 근거"], ov["CI-SYS4-03"]["① 근거"]
+assert round(ov["CI-HWE4-03"]["① 유사도"], 2) == 0.88 and ov["CI-SYS1-01"]["① 유사도"] == 1 and ov["CI-SYS1-01"]["② 유사도"] == 1, ov["CI-HWE4-03"]
+assert ov["CI-SWE3-01"]["① 유사도"] is None  # 수동 확인은 유사도 없음
+summ = {r[0]: r for r in wb["요약"].iter_rows(values_only=True)}
+assert summ["구분"][2] == "Conditional OK" and summ["① 저장소 관리"][2] == 1, summ
+ck = [r for r in wb["확인 필요"].iter_rows(values_only=True)][1:]
+assert any(r[0] == "CI-HWE4-03" and r[5] == "Conditional OK" for r in ck), ck
 print("   run 1 OK —", len(ov), "CI, NOK 행", len(nok))
+
+info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
+assert "metaData" in info["Baseline"] and "11개" in info["Baseline"], info["Baseline"]
+
+time.sleep(61)
+print("=== run 1b: metaData 없는 화면 → 링크·속성 화면에서 읽기 ===")
+M.STATE["meta"] = False
+assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01", "--ci", "CI-SWE6-01"]) == 0
+ov, wb = overview(latest_out())
+assert (ov["CI-SYS1-01"]["② Baseline 포함"], ov["CI-SWE6-01"]["② Baseline 포함"]) == ("OK", "NOK"), ov
+info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
+assert "details.do" in info["Baseline"], info["Baseline"]
+print("   run 1b OK")
 
 time.sleep(61)  # 결과 파일명(분 단위) 구분
 print("=== run 2: 이전 REST API(wiki description) ===")
@@ -76,7 +101,7 @@ assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01", "--ci", "CI-SWE1-01"])
 ov, wb = overview(latest_out())
 assert ov["CI-SYS1-01"]["② Baseline 포함"] == "OK" and ov["CI-SWE1-01"]["② Baseline 포함"] == "NOK", ov
 info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
-assert "목록 API" in info["Baseline"] and "3개" in info["Baseline"], info["Baseline"]
+assert "rest/project" in info["Baseline"] and "3개" in info["Baseline"], info["Baseline"]
 print("   run 2 OK")
 
 time.sleep(61)
@@ -87,4 +112,26 @@ assert C.main(["--config", str(tc), "--ci", "CI-SWE6-01", "--baseline-file", str
 ov, _ = overview(latest_out())
 assert ov["CI-SWE6-01"]["② Baseline 포함"] == "OK", ov
 print("   run 3 OK")
+time.sleep(61)
+print("=== run 4: 화면 요청만 로그인 화면 → 브라우저로 직접 열어 재로그인 ===")
+M.STATE.update(meta=True, legacy_api=False, ui_need="2", ui_issue="2")
+before = M.STATE["ui_logins"]
+assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01"]) == 0
+ov, wb = overview(latest_out())
+assert ov["CI-SYS1-01"]["② Baseline 포함"] == "OK", ov
+assert M.STATE["ui_logins"] == before + 1, "화면 재로그인 1회"
+print("   run 4 OK")
+
+time.sleep(61)
+print("=== run 5: 재로그인해도 화면이 막히면 → 확인불가 + 화면 저장 ===")
+M.STATE.update(ui_need="never", ui_issue="3")
+for f in (root / "state" / "debug").glob("*.html"):
+    f.unlink()
+assert C.main(["--config", str(tc), "--ci", "CI-SYS1-01"]) == 0
+ov, wb = overview(latest_out())
+assert ov["CI-SYS1-01"]["② Baseline 포함"] == "확인불가", ov
+assert list((root / "state" / "debug").glob("baseline_*.html")), "일반 실행에서도 실패 화면 저장"
+tried = [r[0] for r in wb["조회 기록"].iter_rows(values_only=True)]
+assert any("로그인 화면" in str(t) for t in tried), tried
+print("   run 5 OK")
 print("ALL PASS")
