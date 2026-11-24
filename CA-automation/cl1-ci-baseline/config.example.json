@@ -21,7 +21,8 @@
       "name_must_contain": ["PBL"],
       "header_keyword": "산출물"
     },
-    "similar_ratio": 0.9
+    "ok_ratio": 0.9,
+    "conditional_ratio": 0.8
   },
   "browser": {
     "channel": "chrome"

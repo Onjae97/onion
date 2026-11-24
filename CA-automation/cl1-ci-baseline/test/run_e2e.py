@@ -37,14 +37,18 @@ def overview(path):
 EXPECT = {  # CI ID: (① 저장소, ② Baseline)
     "CI-SYS1-01": ("OK", "OK"),
     "CI-SYS2-01": ("OK", "OK"),            # 공백/밑줄 차이 = 같은 이름
-    "CI-HWE1-01": ("OK(유사)", "OK(유사)"),  # ADCU50 vs ADCU50S → 사람 확인
-    "CI-SYS3-01": ("NOK", "OK(유사)"),      # Tracker 404 / Baseline 쪽 오타(Specifiction)
+    "CI-HWE1-01": ("OK", "OK"),            # ADCU50 vs ADCU50S (유사도 98% ≥ 90%)
+    "CI-SYS3-01": ("NOK", "OK"),            # Tracker 404 / Baseline 쪽 오타(Specifiction, 98%)
     "CI-SWE1-01": ("NOK", "OK"),            # 경로 Tracker 이름 다름, 다른 위치에 같은 이름 Tracker
     "CI-SWE6-01": ("OK", "NOK"),            # Baseline에 없음
     "CI-SYS1-02": ("OK", "OK"),             # Confluence 페이지 (Category 빈칸 → 위 행 값)
     "CI-SWE3-01": ("수동 확인", "OK"),       # Git
     "CI-SUP8-01": ("확인불가", "NOK"),       # Tracker 조회 500
     "CI-SYS2-02": ("NOK", "OK"),            # 경로 비어 있음
+    "CI-SYS5-05": ("OK", "OK"),             # 하위 Tracker → 상위 이름 = CI name
+    "CI-SYS5-06": ("OK", "OK"),             # 손자 Tracker → 최상위 이름 = CI name
+    "CI-SYS4-03": ("NOK", "OK"),            # 하위 Tracker, 상위 이름도 다름
+    "CI-HWE4-03": ("Conditional OK", "OK"), # 'and Report'·ADUC 오타 → 88%
 }
 
 print("=== doctor ===")
@@ -64,13 +68,21 @@ assert ov["CI-SYS1-02"]["Category"] == "SWE.6"  # 병합 셀 → 위 행 값
 summ = [r for r in wb["요약"].iter_rows(values_only=True)]
 assert any(r[0] == "사용한 Baseline" and r[1] == "HKMC_ADCU50S_RS4FL_G_M_PBL_2026-11-19" for r in summ), summ
 bl = list(wb["Baseline"].iter_rows(values_only=True))[1:]
-assert len(bl) == 8 and bl[2][1] == "System Requirements Specification_ADCU50", bl
+assert len(bl) == 11 and bl[2][1] == "System Requirements Specification_ADCU50", bl
 nok = list(wb["NOK"].iter_rows(values_only=True))[1:]
-assert len(nok) == 5, nok
+assert len(nok) == 6, nok
+assert "상위 '" in ov["CI-SYS5-05"]["① 근거"] and "1101" in ov["CI-SYS5-06"]["① 근거"], ov["CI-SYS5-06"]
+assert "'SYS.4' > 'Integration Test Plan'" in ov["CI-SYS4-03"]["① 근거"], ov["CI-SYS4-03"]["① 근거"]
+assert round(ov["CI-HWE4-03"]["① 유사도"], 2) == 0.88 and ov["CI-SYS1-01"]["① 유사도"] == 1 and ov["CI-SYS1-01"]["② 유사도"] == 1, ov["CI-HWE4-03"]
+assert ov["CI-SWE3-01"]["① 유사도"] is None  # 수동 확인은 유사도 없음
+summ = {r[0]: r for r in wb["요약"].iter_rows(values_only=True)}
+assert summ["구분"][2] == "Conditional OK" and summ["① 저장소 관리"][2] == 1, summ
+ck = [r for r in wb["확인 필요"].iter_rows(values_only=True)][1:]
+assert any(r[0] == "CI-HWE4-03" and r[5] == "Conditional OK" for r in ck), ck
 print("   run 1 OK —", len(ov), "CI, NOK 행", len(nok))
 
 info = {r[0]: r[1] for r in wb["실행정보"].iter_rows(values_only=True)}
-assert "metaData" in info["Baseline"] and "8개" in info["Baseline"], info["Baseline"]
+assert "metaData" in info["Baseline"] and "11개" in info["Baseline"], info["Baseline"]
 
 time.sleep(61)
 print("=== run 1b: metaData 없는 화면 → 링크·속성 화면에서 읽기 ===")

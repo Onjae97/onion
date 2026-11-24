@@ -29,6 +29,10 @@ def make_ci_list():
         ("MAN.3", "CI-MAN3-01", "Project Plan", "Codebeamer", f"{CB}/tracker/1007", None),
         ("SUP.8", "CI-SUP8-01", "CM Plan", "Codebeamer", f"{CB}/tracker/1500", "PBL"),
         ("SYS.2", "CI-SYS2-02", "Concept Requirement Specification", "Codebeamer", "", "PBL"),
+        ("SYS.5", "CI-SYS5-05", "System Qualification Test Specfication_ADCU50", "Codebeamer", f"{CB}/tracker/1102", "PBL"),  # 하위
+        ("SYS.5", "CI-SYS5-06", "System Qualification Test Specfication_ADCU50", "Codebeamer", f"{CB}/tracker/1103", "PBL"),  # 손자
+        ("SYS.4", "CI-SYS4-03", "System Integration test Specification_ADCU50", "Codebeamer", f"{CB}/tracker/1202", "PBL"),  # 상위도 다름
+        ("HWE.4", "CI-HWE4-03", "Hardware Integration Test Specification_ADCU-50S", "Codebeamer", f"{CB}/tracker/1300", "PBL"),  # 88%
     ]
     for i, (cat, cid, name, repo, path, pbl) in enumerate(rows):
         n = 4 + i
@@ -42,12 +46,21 @@ CI_XLSX = make_ci_list()
 TRACKERS = {1001: "Stakeholder Requirements(FuSa)", 1002: "System Requirements Specification ADCU50",
             1003: "Hardware Requirements Specification_ADCU50S", 1004: "SW Test Plan",
             1005: "Software Requirements Specification", 1006: "Software Qualification Test Report", 1007: "Project Plan"}
-TREE = [{"isFolder": True, "text": "SWE", "children": [{"trackerId": t, "text": n} for t, n in TRACKERS.items()]}]
+TRACKERS.update({1101: "System Qualification Test Specfication_ADCU50", 1102: "HDA4-STC-D002-Function", 1103: "HDA4-STC-D002-Sub",
+                 1201: "Integration Test Plan", 1202: "Test Cases (All) (SyITS)_ADCU50",
+                 1300: "Hardware Integration Test Specification and Report_ADUC-50S"})
+TREE = [{"isFolder": True, "text": "SWE", "children": [{"trackerId": t} for t in TRACKERS if t < 1100]},  # 실측: Tracker 노드는 번호만
+        {"isFolder": True, "text": "SYS.5", "children": [{"trackerId": 1101, "children": [
+            {"trackerId": 1102, "children": [{"trackerId": 1103}]}]}]},
+        {"isFolder": True, "text": "SYS.4", "children": [{"trackerId": 1201, "children": [{"trackerId": 1202}]}]},
+        {"isFolder": True, "text": "HWE.4", "children": [{"trackerId": 1300}]}]
 
 DESC_ROWS = [("Stakeholder Requirements(FuSa)", "v3.0"), ("Item Definition", "v5.0"),
              ("System Requirements Specification_ADCU50", "v2.5"), ("System Architectural Design Specifiction_ADCU50", "v2.1"),
              ("Hardware Requirements Specification_ADCU50S", "v3.0"), ("Software Requirements Specification", "v2.3"),
-             ("Source code", "-"), ("Concept Requirement Specification", "v2.9")]
+             ("Source code", "-"), ("Concept Requirement Specification", "v2.9"),
+             ("System Qualification Test Specfication_ADCU50", "v7.0"), ("System Integration test Specification_ADCU50", "v1.0"),
+             ("Hardware Integration Test Specification_ADCU-50S", "v3.0")]
 DESC_HTML = ("<table class='propertyTable'><tr><td>Name:</td><td><a href='/cb/doc/9705300'>HKMC_ADCU50S_RS4FL_G_M_PBL_2026-11-19</a></td>"
              "<td>Description:</td><td><div class='wiki'><table><tr><th>PBL Baseline 대상 산출물</th><th>산출물 버전</th></tr>"
              + "".join(f"<tr><td>{n.replace('_', '<br>_', 1) if 'ADCU' in n else n}</td><td>{v}</td></tr>" for n, v in DESC_ROWS)
