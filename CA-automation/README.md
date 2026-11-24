@@ -4,8 +4,11 @@
 
 | 도구 | 설명 | 사용 기술 |
 | --- | --- | --- |
-| [traceability](traceability/) | CI list의 CI(Codebeamer Tracker, 하위 Tracker 포함)마다 연결이 없는 Item을 전수 조사해 추적성 Gap Matrix 엑셀 생성. 로그인 세션 재사용·자동 로그인, DRM 엑셀 읽기 지원 | Python, Playwright, openpyxl, pywin32, keyring |
-| [cl1-ci-baseline](cl1-ci-baseline/) | 체크리스트 CL1 — CI list의 CI가 등록 저장소(Path in Repository)에서 실제로 관리되는지, 최신 PBL Baseline 대상 산출물에 포함되는지 점검해 NOK 목록 엑셀 생성. 추적성 도구와 별개 관리 | Python, Playwright, openpyxl, pywin32, keyring |
+| [CL6_Traceability](CL6_Traceability/) | CI list의 CI(Codebeamer Tracker, 하위 Tracker 포함)마다 연결이 없는 Item을 전수 조사해 추적성 Gap Matrix 엑셀 생성. 로그인 세션 재사용·자동 로그인, DRM 엑셀 읽기 지원 | Python, Playwright, openpyxl, pywin32, keyring |
+| [CL1_Repo_baseline](CL1_Repo_baseline/) | 체크리스트 CL1 — CI list의 CI가 등록 저장소(Path in Repository)에서 실제로 관리되는지, 최신 PBL Baseline 대상 산출물에 포함되는지 점검해 NOK 목록 엑셀 생성. 추적성 도구와 별개 관리 | Python, Playwright, openpyxl, pywin32, keyring |
+
+## 폴더 이름 규칙
+체크리스트 항목별로 `CL<번호>_<항목>` (예: `CL1_Repo_baseline`, `CL6_Traceability`). CL1~CL11 자동화가 끝나면 합본으로 묶을 예정.
 
 ## 공통 원칙
 - 조회는 읽기 전용, 조회 실패는 **확인불가**로 남긴다 (연결/미연결로 넘기지 않음)
@@ -16,7 +19,7 @@
 ## 다른 PC에서 쓰기
 ```
 git clone https://github.com/Onjae97/onion
-cd onion\CA-automation\traceability
+cd onion\CA-automation\CL6_Traceability      (CL1은 CL1_Repo_baseline)
 copy config.example.json config.json   (실제 값 입력)
-setup.bat → set_login.bat → doctor.bat → run_traceability.bat
+setup.bat → set_login.bat → doctor.bat → run_traceability.bat   (CL1은 run_cl1.bat)
 ```

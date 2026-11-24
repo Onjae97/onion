@@ -7,7 +7,7 @@
 | ① 저장소 관리 | CI list의 `Path in Repository`에서 **CI name과 같은 산출물**이 실제로 관리되고 있는가 | 경로 비어 있음 / 경로의 Tracker·페이지 없음 / 이름이 다름 |
 | ② Baseline 포함 | 최신 PBL Baseline의 **Description(대상 산출물 목록)** 에 있는가 (버전은 비교 안 함) | 목록에 없음 |
 
-체크리스트 6번(추적성, `../traceability`)과는 **별개 도구**입니다. 설정·로그인 세션·결과 파일도 따로 둡니다.
+체크리스트 6번(추적성, `../CL6_Traceability`)과는 **별개 도구**입니다. 설정·로그인 세션·결과 파일도 따로 둡니다.
 (CL1~CL11 자동화가 끝나면 합본으로 묶을 예정)
 
 ## 처음 한 번만
@@ -68,7 +68,7 @@
 | `Baseline 내용을 읽지 못했습니다` | `doctor.bat` 실행 → `조회:` 줄과 `state\debug\baseline_*.html` 파일을 Claude에게 전달. 급하면 `--baseline-file` |
 | 엉뚱한 Baseline이 선택됨 | `Baseline 후보` 탭 확인 → config의 `keywords`·`name_must_contain` 조정, 또는 `--baseline-id` |
 | Conditional OK가 너무 많음/적음 | config의 `cl1.ok_ratio`(0.9)·`cl1.conditional_ratio`(0.8) 조정 |
-| 그 밖의 문제 | `../traceability/README.md`의 '문제가 생기면' 표와 같음 (로그인·DRM·브라우저) |
+| 그 밖의 문제 | `../CL6_Traceability/README.md`의 '문제가 생기면' 표와 같음 (로그인·DRM·브라우저) |
 
 ## 파일 구성
 - `cl1_check.py` 본체 · `config.json` 설정 · `SKILL.md` AI 에이전트용 규칙
