@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.8"
+VERSION = "1.9.1"
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state"
 
@@ -448,7 +448,45 @@ class ApiError(Exception):
     pass
 
 
+class Progress:
+    """진행률 한 줄 표시: [=====>     ]  46% (690/1500) · 경과 · 남은 시간. 조회 묶음이 끝날 때마다 같은 줄을 다시 그림."""
+    WIDTH = 30
+
+    def __init__(self, label, total, out=None):
+        self.label, self.total, self.done, self.t0 = label, max(total, 1), 0, time.time()
+        self.out = out or sys.stdout
+        self.draw()
+
+    def step(self, n):
+        self.done = min(self.total, self.done + n)
+        self.draw()
+
+    def draw(self):
+        pct = self.done / self.total
+        fill = int(self.WIDTH * pct)
+        el = time.time() - self.t0
+        eta = (el / self.done * (self.total - self.done)) if self.done else None
+        left = f" · 남은 시간 약 {_dur(eta)}" if eta is not None and self.done < self.total else ""
+        bar = "=" * fill + (">" if fill < self.WIDTH else "") + " " * max(0, self.WIDTH - fill - 1)
+        self.out.write(f"\r   {self.label} [{bar}] {pct * 100:3.0f}% ({self.done}/{self.total}) · 경과 {_dur(el)}{left}   ")
+        self.out.flush()
+
+    def close(self):
+        self.out.write("\n")
+        self.out.flush()
+
+
+def _dur(s):
+    s = int(s)
+    return f"{s // 60}분 {s % 60:02d}초" if s >= 60 else f"{s}초"
+
+
+PROGRESS_LABELS = (("/relations", "연결 조회"), ("/api/v3/items/", "Item 상세 조회"), ("/api/v3/trackers/", "Tracker 조회"))
+
+
 class Client:
+    progress = True  # 조회가 묶음 2개 이상이면 진행률 표시 (조회 수·속도에는 영향 없음)
+
     def __init__(self, fetch_json, base, batch=10, retry=3, sleep=time.sleep, relogin=None):
         self.fetch_json, self.base, self.batch, self.retry, self.sleep = fetch_json, base.rstrip("/"), batch, retry, sleep
         self.relogin = relogin
@@ -457,6 +495,17 @@ class Client:
         """paths 순서대로 (ok, json|에러문구) 반환. 일시 오류는 재시도."""
         out = [None] * len(paths)
         pending = list(range(len(paths)))
+        bar = None
+        if self.progress and len(paths) >= self.batch * 2:
+            label = next((lb for key, lb in PROGRESS_LABELS if key in paths[0]), "조회")
+            bar = Progress(label, len(paths))
+        try:
+            return self._get_many(paths, out, pending, bar)
+        finally:
+            if bar:
+                bar.close()
+
+    def _get_many(self, paths, out, pending, bar):
         for attempt in range(self.retry + 1):
             nxt = []
             for k in range(0, len(pending), self.batch):
@@ -477,6 +526,8 @@ class Client:
                         nxt.append(i)
                     else:
                         out[i] = (False, f"HTTP {s} {r.get('e', '')}".strip())
+                if bar and attempt == 0:
+                    bar.step(len(chunk))
             if not nxt:
                 break
             pending = nxt
@@ -498,16 +549,25 @@ def cb_items(cl, tids, page_size=500):
         for k in range(0, len(tids), 40):
             ids = ",".join(tids[k:k + 40])
             q = f"tracker.id%20IN%20({ids})"
-            page, got = 1, 0
-            while True:
-                r = cl.get(f"/api/v3/items/query?queryString={q}&page={page}&pageSize={page_size}")
-                items = r.get("items") or []
-                got += len(items)
-                for it in items:
-                    out.setdefault(it["id"], it)
-                if not items or got >= (r.get("total") or 0):
-                    break
-                page += 1
+            page, got, bar = 1, 0, None
+            try:
+                while True:
+                    r = cl.get(f"/api/v3/items/query?queryString={q}&page={page}&pageSize={page_size}")
+                    items = r.get("items") or []
+                    got += len(items)
+                    for it in items:
+                        out.setdefault(it["id"], it)
+                    total = r.get("total") or 0
+                    if bar is None and getattr(cl, "progress", False) and total > len(items):  # 2페이지 이상일 때만
+                        bar = Progress("Item 목록 조회", total)
+                    if bar:
+                        bar.step(len(items))
+                    if not items or got >= total:
+                        break
+                    page += 1
+            finally:
+                if bar:
+                    bar.close()
         return list(out.values())
     except ApiError as e:
         log(f"    · 검색 API 실패({e}) → Tracker 목록 API로 재시도")
@@ -694,6 +754,7 @@ def check_ci(cl, ci, exclude, sample=10, scope_mode="top_with_descendants", type
                           "total": 0, "excluded": 0, "denom": 0, "unlinked": 0, "unknown": 0,
                           "unset": 0, "unset_unlinked": 0, "has_type": has_type_field(cl, tid)}
         r["key"] = tinfo.get(str(ci["trackerId"]), {}).get("key") or r["key"]
+        log(f"   Item 목록 조회 중… (Tracker {len(sc['trackers'])}개)")
         items = cb_items(cl, sc["trackers"])
         in_scope = set(sc["trackers"])
 
@@ -711,6 +772,7 @@ def check_ci(cl, ci, exclude, sample=10, scope_mode="top_with_descendants", type
         for it in items:
             if is_excluded(it, exclude):
                 tinfo[tid_of(it)]["excluded"] += 1
+        log(f"   Item {len(items)}개 (판정 대상 {len(targets)}개) → 연결 조회")
         r["dist_target"] = _dist(targets)
         r["dist_excl"] = _dist([it for it in items if is_excluded(it, exclude)])
         res = cl.get_many([f"/api/v3/items/{it['id']}/relations" for it in targets])
@@ -1248,6 +1310,7 @@ def main(argv=None):
             type_cache = {}  # 연결 상대 유형 — 이번 실행 안에서만 재사용
             for n, c in enumerate(cis, 1):
                 t1 = time.time()
+                log(f"③ ({n}/{len(cis)}) {c['ciId']} 검사 중…")
                 r = check_ci(ccb, c, exclude, cfg.get("verify_sample", 10), scope, type_cache)
                 results.append(r)
                 cov = coverage(r["denom"], len(r["unlinked"]))
